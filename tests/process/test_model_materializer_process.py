@@ -203,9 +203,10 @@ def test_model_materializer_fetches_tiny_registered_twin_and_publishes_once(
     tmp_path: Path,
 ) -> None:
     files = {
-        "1_Pooling/config.json": b'{}\n',
+        "1_Pooling/config.json": b"{}\n",
         "model.safetensors": b"tiny synthetic weights\n",
     }
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             prefix = "/synthetic/model/resolve/" + "a" * 40 + "/"
@@ -493,7 +494,7 @@ def test_model_materializer_atomic_publish_preserves_destination_race(
     assert tuple(path.name for path in destination.iterdir()) == ("malicious.bin",)
 
 
-def test_model_materializer_retains_validated_destination_parent(
+def test_model_materializer_refuses_replaced_destination_parent(
     tmp_path: Path,
 ) -> None:
     files = {"model.safetensors": b"tiny synthetic weights\n"}
@@ -520,19 +521,13 @@ def test_model_materializer_retains_validated_destination_parent(
         staging_attack="parent-swap",
     )
 
-    assert completed.returncode == 0
-    assert json.loads(completed.stdout) == {
-        "schemaVersion": "context-engine-model-materializer-v1",
-        "service": "context-engine-model-materializer",
-        "status": "materialized",
-        "category": "ready",
-    }
+    _assert_closed_output(completed, category="publication_refused", returncode=13)
     assert not destination.exists()
     assert (selected_parent / "malicious.bin").read_bytes() == (
         b"malicious-parent-canary\n"
     )
     retained = tmp_path / "retained-parent" / "durable-model"
-    assert (retained / "model.safetensors").read_bytes() == files["model.safetensors"]
+    assert not retained.exists()
 
 
 def test_model_materializer_refuses_staging_name_swap_before_publication(
@@ -563,9 +558,7 @@ def test_model_materializer_refuses_staging_name_swap_before_publication(
     _assert_closed_output(completed, category="publication_refused", returncode=13)
     assert not destination.exists()
     retained = tmp_path / "retained-verified-staging"
-    assert (retained / "model.safetensors").read_bytes() == files[
-        "model.safetensors"
-    ]
+    assert (retained / "model.safetensors").read_bytes() == files["model.safetensors"]
 
 
 def test_model_materializer_interrupt_is_closed_and_cleans_staging(

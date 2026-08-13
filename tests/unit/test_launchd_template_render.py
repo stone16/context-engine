@@ -326,6 +326,32 @@ def test_exact_head_rerun_upgrades_the_renderer_owned_v1_manifest(
     assert upgraded["schemaStateDigest"] == SCHEMA_STATE_DIGEST
 
 
+def test_render_reports_a_v1_label_change_as_immutable(tmp_path: Path) -> None:
+    configuration = _configuration(tmp_path)
+    destination = configuration.checkout / ".context-engine" / "launchd"
+    destination.mkdir()
+    rendered = render_launchd_templates(configuration)
+    for name, content in rendered.items():
+        target = destination / name
+        target.write_text(content, encoding="utf-8")
+        target.chmod(0o600)
+    manifest = destination / "render-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "labelPrefix": "org.example.previous-context-engine",
+                "plists": sorted(rendered),
+                "schemaVersion": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+
+    with pytest.raises(LaunchdRenderRefused, match="prefix is immutable"):
+        _write_rendered_templates(configuration, destination)
+
+
 def test_render_refuses_a_label_change_until_the_old_services_are_uninstalled(
     tmp_path: Path,
 ) -> None:
@@ -333,16 +359,38 @@ def test_render_refuses_a_label_change_until_the_old_services_are_uninstalled(
     destination = configuration.checkout / ".context-engine" / "launchd"
     first = _write_rendered_templates(configuration, destination)
     changed = LaunchdRenderConfiguration(
-        **(
-            configuration.__dict__
-            | {"label_prefix": "org.example.context-engine-v2"}
-        )
+        **(configuration.__dict__ | {"label_prefix": "org.example.context-engine-v2"})
     )
 
     with pytest.raises(LaunchdRenderRefused, match="prefix is immutable"):
         _write_rendered_templates(changed, destination)
 
     assert set(destination.glob("*.plist")) == set(first)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("schemaVersion", 3),
+        ("codeRevision", "z" * 40),
+    ),
+)
+def test_render_reports_a_malformed_manifest_as_invalid(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    configuration = _configuration(tmp_path)
+    destination = configuration.checkout / ".context-engine" / "launchd"
+    _write_rendered_templates(configuration, destination)
+    manifest = destination / "render-manifest.json"
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document[field] = value
+    manifest.write_text(json.dumps(document), encoding="utf-8")
+    manifest.chmod(0o600)
+
+    with pytest.raises(LaunchdRenderRefused, match="^render manifest is invalid$"):
+        _write_rendered_templates(configuration, destination)
 
 
 def test_render_refuses_to_delete_an_unknown_plist(tmp_path: Path) -> None:
@@ -382,12 +430,10 @@ def test_shell_quoted_json_environment_remains_one_live_source(
     tmp_path: Path,
 ) -> None:
     configuration = _configuration(tmp_path)
-    operator_environment = (
-        configuration.checkout / ".context-engine" / "operators.env"
-    )
+    operator_environment = configuration.checkout / ".context-engine" / "operators.env"
     operator_environment.write_text(
         "CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON="
-        "'{\"maintainer-notes\":\"/private/notes\"}'\n",
+        '\'{"maintainer-notes":"/private/notes"}\'\n',
         encoding="utf-8",
     )
     operator_environment.chmod(0o600)
@@ -598,8 +644,7 @@ def test_child_projections_follow_the_owning_configuration_contracts() -> None:
         if name.endswith("_ENV") and isinstance(value, str)
     }
     assert dogfood_owned_names <= (
-        DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES
-        | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
+        DOGFOOD_RUNTIME_ENVIRONMENT_VARIABLES | DOGFOOD_CONTROL_ENVIRONMENT_VARIABLES
     )
     operator_owned_names = {
         value

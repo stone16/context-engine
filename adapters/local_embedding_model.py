@@ -9,7 +9,7 @@ import stat
 from contextlib import suppress
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from typing import Any, cast
+from typing import Any, ClassVar, Literal, cast
 
 import rfc8785
 
@@ -33,22 +33,62 @@ class LocalEmbeddingModelUnavailable(RuntimeError):
     """The pinned local model identity or backend could not be resolved."""
 
 
+ModelReadinessCategory = Literal[
+    "model_manifest_unavailable",
+    "model_manifest_invalid",
+    "model_artifacts_unavailable",
+    "model_artifacts_invalid",
+]
+
+
+class LocalEmbeddingModelReadinessError(LocalEmbeddingModelUnavailable):
+    """A content-free, operator-actionable local-model readiness refusal."""
+
+    readiness_category: ClassVar[ModelReadinessCategory]
+
+    def __init__(self) -> None:
+        super().__init__("Local embedding model is unavailable")
+
+
+class LocalEmbeddingModelManifestUnavailable(LocalEmbeddingModelReadinessError):
+    readiness_category = "model_manifest_unavailable"
+
+
+class LocalEmbeddingModelManifestInvalid(LocalEmbeddingModelReadinessError):
+    readiness_category = "model_manifest_invalid"
+
+
+class LocalEmbeddingModelArtifactsUnavailable(LocalEmbeddingModelReadinessError):
+    readiness_category = "model_artifacts_unavailable"
+
+
+class LocalEmbeddingModelArtifactsInvalid(LocalEmbeddingModelReadinessError):
+    readiness_category = "model_artifacts_invalid"
+
+
 def _reject_json_constant(_value: str) -> None:
     raise ValueError
 
 
-def registered_qwen_snapshot_contract(
-) -> tuple[str, str, str, tuple[tuple[str, str], ...]]:
+def registered_qwen_snapshot_contract() -> tuple[
+    str, str, str, tuple[tuple[str, str], ...]
+]:
     """Load exact Qwen identity and artifacts from the tracked registry."""
 
     try:
         metadata = MODEL_REGISTRY_PATH.stat()
-        if (
-            not MODEL_REGISTRY_PATH.is_file()
-            or not 0 < metadata.st_size <= _MAX_REGISTRY_BYTES
-        ):
-            raise ValueError
+    except (OSError, MemoryError):
+        raise LocalEmbeddingModelManifestUnavailable from None
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or not 0 < metadata.st_size <= _MAX_REGISTRY_BYTES
+    ):
+        raise LocalEmbeddingModelManifestInvalid from None
+    try:
         raw = MODEL_REGISTRY_PATH.read_bytes()
+    except (OSError, MemoryError):
+        raise LocalEmbeddingModelManifestUnavailable from None
+    try:
         if len(raw) != metadata.st_size:
             raise ValueError
         root = json.loads(raw, parse_constant=_reject_json_constant)
@@ -118,10 +158,7 @@ def registered_qwen_snapshot_contract(
             cast(str, identity["artifactDigest"]),
             tuple(artifacts),
         )
-    except LocalEmbeddingModelUnavailable:
-        raise
     except (
-        OSError,
         UnicodeDecodeError,
         json.JSONDecodeError,
         KeyError,
@@ -129,15 +166,25 @@ def registered_qwen_snapshot_contract(
         ValueError,
         OverflowError,
         RecursionError,
-        MemoryError,
     ):
-        raise LocalEmbeddingModelUnavailable(
-            "Local embedding model is unavailable"
-        ) from None
+        raise LocalEmbeddingModelManifestInvalid from None
 
 
 def _registered_qwen_artifacts() -> tuple[tuple[str, str], ...]:
     return registered_qwen_snapshot_contract()[3]
+
+
+def _required_descriptor_flags() -> tuple[int, int]:
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    no_follow_flag = getattr(os, "O_NOFOLLOW", None)
+    if (
+        type(directory_flag) is not int
+        or directory_flag == 0
+        or type(no_follow_flag) is not int
+        or no_follow_flag == 0
+    ):
+        raise ValueError
+    return directory_flag, no_follow_flag
 
 
 def verify_model_artifacts(
@@ -148,12 +195,12 @@ def verify_model_artifacts(
     """Verify one exact artifact tree through no-follow directory descriptors."""
 
     try:
-        flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            flags |= os.O_DIRECTORY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        directory_flag, no_follow_flag = _required_descriptor_flags()
+        flags = os.O_RDONLY | directory_flag | no_follow_flag
         root_descriptor = os.open(model_dir, flags)
+    except (OSError, MemoryError, TypeError, ValueError):
+        raise LocalEmbeddingModelArtifactsUnavailable from None
+    try:
         try:
             verify_model_artifacts_descriptor(
                 root_descriptor,
@@ -162,10 +209,10 @@ def verify_model_artifacts(
             )
         finally:
             os.close(root_descriptor)
-    except (OSError, TypeError, ValueError):
-        raise LocalEmbeddingModelUnavailable(
-            "Local embedding model is unavailable"
-        ) from None
+    except (OSError, MemoryError):
+        raise LocalEmbeddingModelArtifactsUnavailable from None
+    except (TypeError, ValueError):
+        raise LocalEmbeddingModelArtifactsInvalid from None
 
 
 def verify_model_artifacts_descriptor(
@@ -173,6 +220,7 @@ def verify_model_artifacts_descriptor(
     expected_artifacts: tuple[tuple[str, str], ...],
     expected_artifact_digest: str,
 ) -> None:
+    _required_descriptor_flags()
     if type(root_descriptor) is not int or root_descriptor < 0:
         raise ValueError
     root_metadata = os.fstat(root_descriptor)
@@ -208,11 +256,12 @@ def verify_model_artifacts_descriptor(
                 for block in iter(lambda: handle.read(1024 * 1024), b""):
                     digest.update(block)
             after = os.fstat(descriptor)
-            if (
-                (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-                or digest.hexdigest() != expected_digest
-            ):
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ) or digest.hexdigest() != expected_digest:
                 raise ValueError
             manifest.append({"path": relative_path, "sha256": expected_digest})
     finally:
@@ -240,11 +289,8 @@ def _artifact_tree_from_descriptor(
             metadata = entry.stat(follow_symlinks=False)
             if stat.S_ISDIR(metadata.st_mode):
                 directories.add(relative.as_posix())
-                flags = os.O_RDONLY
-                if hasattr(os, "O_DIRECTORY"):
-                    flags |= os.O_DIRECTORY
-                if hasattr(os, "O_NOFOLLOW"):
-                    flags |= os.O_NOFOLLOW
+                directory_flag, no_follow_flag = _required_descriptor_flags()
+                flags = os.O_RDONLY | directory_flag | no_follow_flag
                 child = os.open(name, flags, dir_fd=directory_descriptor)
                 try:
                     opened = os.fstat(child)
@@ -259,14 +305,13 @@ def _artifact_tree_from_descriptor(
                 continue
             if not stat.S_ISREG(metadata.st_mode):
                 raise ValueError
-            flags = os.O_RDONLY
-            if hasattr(os, "O_NOFOLLOW"):
-                flags |= os.O_NOFOLLOW
+            _directory_flag, no_follow_flag = _required_descriptor_flags()
+            flags = os.O_RDONLY | no_follow_flag
             descriptor = os.open(name, flags, dir_fd=directory_descriptor)
             opened = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
+            if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                metadata.st_dev,
+                metadata.st_ino,
             ):
                 os.close(descriptor)
                 raise ValueError
@@ -325,6 +370,11 @@ def verify_registered_qwen_artifacts(model_dir: Path) -> None:
 
 
 __all__ = [
+    "LocalEmbeddingModelArtifactsInvalid",
+    "LocalEmbeddingModelArtifactsUnavailable",
+    "LocalEmbeddingModelManifestInvalid",
+    "LocalEmbeddingModelManifestUnavailable",
+    "LocalEmbeddingModelReadinessError",
     "LocalEmbeddingModelUnavailable",
     "QWEN3_EMBEDDING_PROFILE",
     "load_qwen_local_model",

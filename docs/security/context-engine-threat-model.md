@@ -14,13 +14,15 @@ This document turns ContextEngine's product boundary into explicit threats,
 trust boundaries, and security oracles. It supports the implementation design;
 it does not replace that design or an accepted ADR.
 
-The repository now contains bounded executable carriers and registered Security
-evidence; [`STATUS.md`](../../STATUS.md) is the navigational ledger and the
-versioned active-carrier registry records their exact scope. This document does
-not generalize those proofs: a threat is closed only for the carrier and tier
-covered by its registered evidence. Contract fixtures can prove deterministic
-boundary behavior, while PostgreSQL, source ACL, wire, model-egress, and
-external-effect claims still require their corresponding real dependencies.
+The [active-carrier registry](../../eval/catalogs/active-carriers-v1.json) is the
+canonical cross-carrier status and completeness join;
+[`STATUS.md`](../../STATUS.md) is its checked navigational mirror. Registry
+validation neither activates carriers nor evaluates Security. A threat closes
+only for the exact carrier and tier named by registered Security evidence;
+registry completeness cannot convert `NOT_ACTIVE`, missing evidence, or failed
+evidence into `PASS`. Contract fixtures can prove deterministic boundary
+behavior, while PostgreSQL, source ACL, wire, model-egress, and external-effect
+claims still require their corresponding real dependencies.
 
 ## 2. Protected assets
 
@@ -164,9 +166,10 @@ The detailed test architecture is in
 `Test-Architecture-与可验证性设计.md`; stable adversarial cases are in
 `安全负向测试清单.md`. Before a milestone closes, every applicable threat must map
 to a versioned invariant, an activated capability, a reproducible command, and
-an evidence artifact. Current bounded evidence includes real PostgreSQL
+an evidence artifact. Current bounded Security evidence includes real PostgreSQL
 transaction-context and RLS tests, filtered-ANN tests, and deterministic Feishu
-twin evidence; it proves only the exact carriers registered in `STATUS.md`.
-Live Feishu, production authentication, remote/multi-user Runtime, and other
-explicitly deferred carriers remain `NOT_ACTIVE` until their own required tier
-of evidence exists.
+twin evidence. Each proof remains limited to the carrier and tier named by its
+Security registration; the active-carrier registry only cross-references status,
+authority, and public proof. Live Feishu, production authentication,
+remote/multi-user Runtime, and other deferred carriers remain `NOT_ACTIVE` until
+their required evidence tier exists.

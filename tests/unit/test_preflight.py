@@ -5,10 +5,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.engine import make_url
 
 import adapters.local_embedding_model as local_model
 from applications import preflight
-from engine.database_roles import expected_database_role_facts
+from engine.database_roles import (
+    CONTROL_ROLE,
+    LEARNING_ROLE,
+    MIGRATOR_ROLE,
+    RELEASE_OPERATOR_ROLE,
+    RUNTIME_ROLE,
+    SCHEDULER_ROLE,
+    WORKER_ROLE,
+    expected_database_role_facts,
+)
 
 
 def valid_environment() -> dict[str, str]:
@@ -86,6 +96,44 @@ def test_configuration_inventory_accepts_exact_bounded_composition() -> None:
     assert repr(configuration) == "LocalPreflightConfiguration(<redacted>)"
 
 
+def test_database_purpose_inventory_uses_the_authoritative_role_registry() -> None:
+    assert {
+        plane: tuple(purpose[2] for purpose in purposes)
+        for plane, purposes in preflight._DATABASE_PURPOSES.items()
+    } == {
+        "migration": (MIGRATOR_ROLE,),
+        "control": (CONTROL_ROLE,),
+        "supply": (SCHEDULER_ROLE, WORKER_ROLE),
+        "release": (LEARNING_ROLE, RELEASE_OPERATOR_ROLE),
+        "runtime": (RUNTIME_ROLE,),
+        "caller": (),
+    }
+
+
+def test_preflight_database_engine_has_a_server_owned_connect_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    sentinel = object()
+
+    def create_engine(url: object, **kwargs: object) -> object:
+        observed["url"] = url
+        observed.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(preflight, "create_engine", create_engine)
+    url = make_url(
+        "postgresql+psycopg://context_engine_migrator:secret@db/context_engine"
+    )
+
+    assert preflight._create_preflight_engine(url) is sentinel
+    assert observed == {
+        "url": url,
+        "pool_pre_ping": True,
+        "connect_args": {"connect_timeout": 5},
+    }
+
+
 @pytest.mark.parametrize("missing", sorted(preflight.REQUIRED_ENVIRONMENT_NAMES))
 def test_configuration_inventory_classifies_every_missing_name(missing: str) -> None:
     environment = valid_environment()
@@ -109,6 +157,7 @@ def test_configuration_inventory_classifies_every_missing_name(missing: str) -> 
         ("CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER", "network"),
         ("CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR", "/different/model"),
         ("CONTEXT_ENGINE_DOGFOOD_BASE_URL", "https://private.example:8443"),
+        ("CONTEXT_ENGINE_DOGFOOD_BASE_URL", "http://127.0.0.1:8000//"),
         ("CONTEXT_ENGINE_MIGRATOR_ROLE", "context_engine_runtime"),
         (
             "CONTEXT_ENGINE_MIGRATION_DATABASE_URL",
@@ -150,13 +199,118 @@ def test_closed_plane_selection_requires_only_selected_plane_names() -> None:
         )
 
 
+def test_configuration_loader_uses_diagnostics_as_its_validation_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = {
+        "name": "CONTEXT_ENGINE_MIGRATOR_ROLE",
+        "category": "configuration_malformed",
+    }
+    monkeypatch.setattr(
+        preflight,
+        "_configuration_failures",
+        lambda _environment, _selected: (failure,),
+    )
+
+    with pytest.raises(preflight.PreflightConfigurationMalformed):
+        preflight.load_preflight_configuration(
+            valid_environment(),
+            selected_planes=("migration",),
+        )
+
+
+@pytest.mark.parametrize(
+    "selected_planes",
+    ((), ("unknown",), ("migration", "migration")),
+    ids=("empty", "unknown", "duplicate"),
+)
+def test_invalid_plane_selection_is_non_variable_configuration_failure(
+    selected_planes: tuple[str, ...],
+) -> None:
+    result = preflight.run_preflight(
+        valid_environment(),
+        selected_planes=selected_planes,
+        schema_probe=lambda _configuration: "ready",
+        database_probe=lambda _configuration, _role: "ready",
+        model_probe=lambda _configuration: "ready",
+        release_probe=lambda _configuration: "ready",
+        caller_probe=lambda _configuration: "ready",
+    )
+
+    assert result.exit_code == 10
+    document = json.loads(result.rendered)
+    assert document["checks"][0] == {
+        "check": "configuration",
+        "status": "failed",
+        "category": "configuration_malformed",
+    }
+    assert all(
+        row["status"] == "not_run" and row["category"] == "dependency_not_ready"
+        for row in document["checks"][1:]
+    )
+
+
 def test_environment_name_template_mechanically_matches_inventory() -> None:
     template = Path("deploy/local-preflight.env.example").read_text(encoding="utf-8")
     rows = template.splitlines()
 
-    assert rows == [f"{name}=" for name in sorted(preflight.REQUIRED_ENVIRONMENT_NAMES)]
+    assert rows == [f"{name}=" for name in sorted(preflight.ENVIRONMENT_TEMPLATE_NAMES)]
     assert all(row.endswith("=") for row in rows)
     assert all(row.count("=") == 1 for row in rows)
+
+
+def test_configuration_diagnostics_name_every_failure_and_probe_valid_planes() -> None:
+    environment = valid_environment()
+    environment.pop("CONTEXT_ENGINE_CONTROL_ROLE")
+    environment.pop("CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET")
+    environment["CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION"] = "1024"
+    calls: list[str] = []
+
+    def observe(name: str) -> str:
+        calls.append(name)
+        return "ready"
+
+    result = preflight.run_preflight(
+        environment,
+        selected_planes=("migration", "control", "supply"),
+        schema_probe=lambda _configuration: observe("migration"),
+        database_probe=lambda _configuration, role: observe(role),
+        model_probe=lambda _configuration: observe("model"),
+        release_probe=lambda _configuration: observe("release"),
+        caller_probe=lambda _configuration: observe("caller"),
+    )
+
+    assert result.exit_code == 10
+    document = json.loads(result.rendered)
+    assert document["checks"][0] == {
+        "check": "configuration",
+        "status": "failed",
+        "category": "configuration_missing",
+        "failures": [
+            {
+                "name": "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET",
+                "category": "configuration_missing",
+            },
+            {
+                "name": "CONTEXT_ENGINE_CONTROL_ROLE",
+                "category": "configuration_missing",
+            },
+            {
+                "name": "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION",
+                "category": "configuration_malformed",
+            },
+        ],
+    }
+    assert document["checks"][1] == {
+        "check": "migration_schema",
+        "status": "ready",
+        "category": "ready",
+    }
+    assert all(
+        row["status"] == "not_run" and row["category"] == "dependency_not_ready"
+        for row in document["checks"][2:6]
+    )
+    assert calls == ["migration"]
 
 
 def test_model_probe_uses_only_public_registered_model_seams(
@@ -197,6 +351,68 @@ def test_model_probe_uses_only_public_registered_model_seams(
 
     assert preflight.probe_model_readiness(configuration) == "ready"
     assert calls == ["manifest", "artifacts"]
+
+
+def test_model_probe_classifies_an_invalid_registered_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configuration = preflight.load_preflight_configuration(
+        valid_environment(), selected_planes=("supply",)
+    )
+    invalid_registry = tmp_path / "model-registry.json"
+    invalid_registry.write_text('{"schemaVersion":"wrong"}', encoding="utf-8")
+    monkeypatch.setattr(local_model, "MODEL_REGISTRY_PATH", invalid_registry)
+
+    assert preflight.probe_model_readiness(configuration) == "model_manifest_invalid"
+
+
+def test_model_probe_classifies_an_unavailable_registered_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configuration = preflight.load_preflight_configuration(
+        valid_environment(), selected_planes=("supply",)
+    )
+    monkeypatch.setattr(
+        local_model,
+        "MODEL_REGISTRY_PATH",
+        tmp_path / "missing-model-registry.json",
+    )
+
+    assert (
+        preflight.probe_model_readiness(configuration)
+        == "model_manifest_unavailable"
+    )
+
+
+def test_model_probe_classifies_unavailable_registered_artifacts(
+    tmp_path: Path,
+) -> None:
+    environment = valid_environment()
+    environment["CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR"] = str(
+        tmp_path / "missing-model"
+    )
+    configuration = preflight.load_preflight_configuration(
+        environment, selected_planes=("supply",)
+    )
+
+    assert (
+        preflight.probe_model_readiness(configuration)
+        == "model_artifacts_unavailable"
+    )
+
+
+def test_model_probe_classifies_invalid_registered_artifacts(tmp_path: Path) -> None:
+    model_dir = tmp_path / "invalid-model"
+    model_dir.mkdir()
+    environment = valid_environment()
+    environment["CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR"] = str(model_dir)
+    configuration = preflight.load_preflight_configuration(
+        environment, selected_planes=("supply",)
+    )
+
+    assert preflight.probe_model_readiness(configuration) == "model_artifacts_invalid"
 
 
 def test_orchestrator_reports_all_independent_failures_and_earliest_exit() -> None:

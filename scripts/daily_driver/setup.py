@@ -116,7 +116,21 @@ def main(arguments: Sequence[str] | None = None) -> int:
             checkout,
             load_owner_environment(state / "database.env"),
         )
-    except (DeploymentBindingRefused, EnvironmentRefused, SchemaBindingRefused):
+    except EnvironmentRefused:
+        print(
+            "daily-driver setup refused: restore the owner-only "
+            ".context-engine/database.env, then rerun setup",
+            file=sys.stderr,
+        )
+        return 2
+    except DeploymentBindingRefused:
+        print(
+            "daily-driver setup refused: commit the dedicated checkout or restore "
+            "a clean checkout, then rerun setup",
+            file=sys.stderr,
+        )
+        return 2
+    except SchemaBindingRefused:
         print(
             "daily-driver setup refused: run context-engine-control migrate, "
             "then rerun setup",

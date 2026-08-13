@@ -74,6 +74,21 @@ def test_control_process_help_and_unknown_subcommand() -> None:
     assert "not-a-command" in unknown.stderr
 
 
+def test_control_process_bare_invocation_lists_preflight_before_refusing() -> None:
+    completed = subprocess.run(
+        ["context-engine-control"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "usage:" in completed.stderr
+    assert "preflight" in completed.stderr
+
+
 def test_maintainer_context_process_exposes_only_read_subcommands() -> None:
     completed = subprocess.run(
         ["context-engine-context", "--help"],

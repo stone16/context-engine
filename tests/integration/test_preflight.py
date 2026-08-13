@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +12,7 @@ from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
+from sqlalchemy.engine import make_url
 
 from applications import preflight
 from engine.embedding_profiles import (
@@ -147,6 +149,43 @@ def test_real_postgres_plane_database_probes_are_read_only_and_exact_role(
     assert {
         role: preflight.probe_database_readiness(configuration, role) for role in roles
     } == {role: "ready" for role in roles}
+
+
+def test_real_postgres_control_role_reports_unavailable_database_through_public_result(
+    control_configuration: DatabaseConfiguration,
+) -> None:
+    unavailable_url = control_configuration.url.set(database="context_engine_absent")
+    environment = {**valid_environment(), **_database_environment()}
+    environment["CONTEXT_ENGINE_CONTROL_DATABASE_URL"] = (
+        unavailable_url.render_as_string(hide_password=False)
+    )
+
+    result = preflight.run_preflight(
+        environment,
+        selected_planes=("control",),
+        schema_probe=preflight.probe_schema_readiness,
+        database_probe=preflight.probe_database_readiness,
+        model_probe=preflight.probe_model_readiness,
+        release_probe=preflight.probe_release_readiness,
+        caller_probe=preflight.probe_caller_readiness,
+    )
+
+    assert make_url(environment["CONTEXT_ENGINE_CONTROL_DATABASE_URL"]).username == (
+        control_configuration.expected_role
+    )
+    assert result.exit_code == 12
+    document = json.loads(result.rendered)
+    assert document["status"] == "not_ready"
+    assert document["checks"][0] == {
+        "check": "configuration",
+        "status": "ready",
+        "category": "ready",
+    }
+    assert document["checks"][2] == {
+        "check": "control_database",
+        "status": "failed",
+        "category": "database_unavailable",
+    }
 
 
 def test_daily_driver_binding_refuses_interrupted_migration_then_accepts_rerun() -> (

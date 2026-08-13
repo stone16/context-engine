@@ -26,9 +26,7 @@ def test_local_model_load_verifies_bytes_before_and_after_backend_construction(
 ) -> None:
     model_dir = Path("/verified/qwen")
     artifacts = (("model.safetensors", "a" * 64),)
-    verification_calls: list[
-        tuple[Path, tuple[tuple[str, str], ...], str]
-    ] = []
+    verification_calls: list[tuple[Path, tuple[tuple[str, str], ...], str]] = []
     constructed: list[tuple[str, bool, bool]] = []
     model = object()
 
@@ -90,6 +88,35 @@ def test_local_model_refuses_changed_or_extra_artifacts(
             model_dir,
             (("model.safetensors", expected_digest),),
             QWEN3_EMBEDDING_PROFILE.artifact_digest,
+        )
+
+    assert failure.value.__cause__ is None
+
+
+@pytest.mark.parametrize("flag_name", ("O_DIRECTORY", "O_NOFOLLOW"))
+def test_local_model_verifier_requires_safe_descriptor_flags_for_flat_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag_name: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    content = b"registered bytes"
+    (model_dir / "model.safetensors").write_bytes(content)
+    expected_digest = sha256(content).hexdigest()
+    manifest_digest = sha256(
+        rfc8785.dumps([{"path": "model.safetensors", "sha256": expected_digest}])
+    ).hexdigest()
+    monkeypatch.delattr(os, flag_name)
+
+    with pytest.raises(
+        local_model.LocalEmbeddingModelUnavailable,
+        match="Local embedding model is unavailable",
+    ) as failure:
+        local_model.verify_model_artifacts(
+            model_dir,
+            (("model.safetensors", expected_digest),),
+            manifest_digest,
         )
 
     assert failure.value.__cause__ is None

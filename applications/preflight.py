@@ -23,6 +23,7 @@ from sqlalchemy.exc import ArgumentError, OperationalError, SQLAlchemyError
 from engine.database_roles import (
     CONTROL_ROLE,
     LEARNING_ROLE,
+    MIGRATOR_ROLE,
     RELEASE_OPERATOR_ROLE,
     RUNTIME_ROLE,
     SCHEDULER_ROLE,
@@ -53,45 +54,45 @@ _DATABASE_PURPOSES: dict[str, tuple[tuple[str, str, str], ...]] = {
         (
             "CONTEXT_ENGINE_MIGRATOR_ROLE",
             "CONTEXT_ENGINE_MIGRATION_DATABASE_URL",
-            "context_engine_migrator",
+            MIGRATOR_ROLE,
         ),
     ),
     "control": (
         (
             "CONTEXT_ENGINE_CONTROL_ROLE",
             "CONTEXT_ENGINE_CONTROL_DATABASE_URL",
-            "context_engine_control",
+            CONTROL_ROLE,
         ),
     ),
     "supply": (
         (
             "CONTEXT_ENGINE_SCHEDULER_ROLE",
             "CONTEXT_ENGINE_SCHEDULER_DATABASE_URL",
-            "context_engine_scheduler",
+            SCHEDULER_ROLE,
         ),
         (
             "CONTEXT_ENGINE_WORKER_ROLE",
             "CONTEXT_ENGINE_WORKER_DATABASE_URL",
-            "context_engine_worker",
+            WORKER_ROLE,
         ),
     ),
     "release": (
         (
             "CONTEXT_ENGINE_LEARNING_ROLE",
             "CONTEXT_ENGINE_LEARNING_DATABASE_URL",
-            "context_engine_learning",
+            LEARNING_ROLE,
         ),
         (
             "CONTEXT_ENGINE_RELEASE_OPERATOR_ROLE",
             "CONTEXT_ENGINE_RELEASE_OPERATOR_DATABASE_URL",
-            "context_engine_release_operator",
+            RELEASE_OPERATOR_ROLE,
         ),
     ),
     "runtime": (
         (
             "CONTEXT_ENGINE_RUNTIME_ROLE",
             "CONTEXT_ENGINE_RUNTIME_DATABASE_URL",
-            "context_engine_runtime",
+            RUNTIME_ROLE,
         ),
     ),
     "caller": (),
@@ -165,6 +166,16 @@ _PLANE_ENVIRONMENT_NAMES: dict[str, frozenset[str]] = {
     ),
 }
 REQUIRED_ENVIRONMENT_NAMES = frozenset().union(*_PLANE_ENVIRONMENT_NAMES.values())
+JOURNEY_ENVIRONMENT_NAMES = frozenset(
+    {
+        "CONTEXT_ENGINE_FILE_ROOT_REF",
+        "CONTEXT_ENGINE_FILE_SOURCE_DISPLAY_NAME",
+        "CONTEXT_ENGINE_FILE_SOURCE_IDEMPOTENCY_KEY",
+        "CONTEXT_ENGINE_FILE_SOURCE_REF",
+        "CONTEXT_ENGINE_RELEASE_EVIDENCE_FILE",
+    }
+)
+ENVIRONMENT_TEMPLATE_NAMES = REQUIRED_ENVIRONMENT_NAMES | JOURNEY_ENVIRONMENT_NAMES
 
 
 class PreflightConfigurationMissing(ValueError):
@@ -292,6 +303,231 @@ def _database_url(
     return url
 
 
+def _configuration_failures(
+    environment: Mapping[str, str],
+    selected: frozenset[str],
+) -> tuple[dict[str, str], ...]:
+    """Classify every selected configuration name without retaining its value."""
+
+    failures: dict[str, str] = {}
+    required = _required_names(selected)
+    for name in sorted(required):
+        if name not in environment:
+            failures[name] = "configuration_missing"
+            continue
+        try:
+            _nonempty(environment, name)
+        except PreflightConfigurationMalformed:
+            failures[name] = "configuration_malformed"
+
+    def validate(names: tuple[str, ...], operation: Callable[[], object]) -> None:
+        if any(name in failures for name in names):
+            return
+        try:
+            operation()
+        except Exception:
+            for name in names:
+                failures[name] = "configuration_malformed"
+
+    def require(condition: bool) -> None:
+        if not condition:
+            raise PreflightConfigurationMalformed
+
+    def validate_database_purpose(
+        role_name: str,
+        url_name: str,
+        expected_role: str,
+    ) -> None:
+        validate(
+            (role_name,),
+            lambda: require(_nonempty(environment, role_name) == expected_role),
+        )
+        validate(
+            (url_name,),
+            lambda: _database_url(
+                {role_name: expected_role, url_name: environment[url_name]},
+                role_name,
+                url_name,
+                expected_role,
+            ),
+        )
+
+    def validate_uuid(name: str) -> None:
+        validate((name,), lambda: _uuid(environment, name))
+
+    def validate_secret(name: str) -> None:
+        validate((name,), lambda: _secret(environment, name))
+
+    def validate_key(name: str) -> None:
+        validate((name,), lambda: _key(environment, name))
+
+    for plane in selected:
+        for role_name, url_name, expected_role in _DATABASE_PURPOSES[plane]:
+            validate_database_purpose(role_name, url_name, expected_role)
+
+    if "control" in selected:
+        for name in (
+            "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID",
+            "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID",
+            "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID",
+        ):
+            validate_uuid(name)
+        validate(
+            ("CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION",),
+            lambda: _positive_int(
+                environment, "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION"
+            ),
+        )
+        operations_name = "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS"
+        validate(
+            (operations_name,),
+            lambda: require(
+                (
+                    lambda operations: frozenset(operations) == _CONTROL_OPERATIONS
+                    and len(operations) == len(_CONTROL_OPERATIONS)
+                )(_nonempty(environment, operations_name).split(","))
+            ),
+        )
+
+    if selected & {"control", "supply"}:
+        validate(
+            ("CONTEXT_ENGINE_WORKER_FILE_ROOTS_JSON",),
+            lambda: _validate_json_roots(environment),
+        )
+
+    if "supply" in selected:
+        provider_name = "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER"
+        validate(
+            (provider_name,),
+            lambda: require(_nonempty(environment, provider_name) == "qwen-local"),
+        )
+        dimension_name = "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION"
+        validate(
+            (dimension_name,),
+            lambda: require(_positive_int(environment, dimension_name) == 384),
+        )
+        validate(
+            ("CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID",),
+            lambda: _uuid(environment, "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID"),
+        )
+
+    if "runtime" in selected:
+        composition_name = "CONTEXT_ENGINE_API_COMPOSITION"
+        validate(
+            (composition_name,),
+            lambda: require(
+                _nonempty(environment, composition_name) == "dogfood-local-v1"
+            ),
+        )
+        for name in (
+            "CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID",
+            "CONTEXT_ENGINE_DOGFOOD_USER_ID",
+            "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID",
+        ):
+            validate_uuid(name)
+        validate(
+            ("CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION",),
+            lambda: _positive_int(
+                environment, "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION"
+            ),
+        )
+        provider_name = "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER"
+        validate(
+            (provider_name,),
+            lambda: require(
+                _nonempty(environment, provider_name) == "qwen3-embedding-0.6b-local-v1"
+            ),
+        )
+
+    secret_names = required & {
+        "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET",
+        "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
+        "CONTEXT_ENGINE_DOGFOOD_SECRET",
+    }
+    key_names = required & {
+        "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
+        "CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX",
+        "CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX",
+        "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_HEX",
+    }
+    for name in sorted(secret_names):
+        validate_secret(name)
+    for name in sorted(key_names):
+        validate_key(name)
+
+    comparable: dict[str, bytes] = {}
+    for name in sorted(secret_names | key_names):
+        if name in failures:
+            continue
+        comparable[name] = (
+            _secret(environment, name)
+            if name in secret_names
+            else _key(environment, name)
+        )
+    for name, secret in comparable.items():
+        collisions = tuple(
+            other_name
+            for other_name, other in comparable.items()
+            if other_name != name and hmac.compare_digest(secret, other)
+        )
+        if collisions:
+            failures[name] = "configuration_malformed"
+            for other_name in collisions:
+                failures[other_name] = "configuration_malformed"
+
+    if selected >= {"supply", "runtime"}:
+        names = (
+            "CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR",
+            "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR",
+        )
+        validate(
+            names,
+            lambda: require(environment[names[0]] == environment[names[1]]),
+        )
+    if selected >= {"control", "runtime"}:
+        names = (
+            "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID",
+            "CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID",
+        )
+        validate(
+            names,
+            lambda: require(
+                _uuid(environment, names[0]) == _uuid(environment, names[1])
+            ),
+        )
+    if "release" in selected:
+        validate(
+            ("CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION",),
+            lambda: _positive_int(
+                environment,
+                "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION",
+            ),
+        )
+    if "caller" in selected:
+        from adapters.http.dogfood_client import DogfoodHttpConfiguration
+
+        base_name = "CONTEXT_ENGINE_DOGFOOD_BASE_URL"
+        secret_name = "CONTEXT_ENGINE_DOGFOOD_SECRET"
+        validate(
+            (base_name,),
+            lambda: DogfoodHttpConfiguration(
+                base_url=_nonempty(environment, base_name),
+                secret="x" * 32,
+            ),
+        )
+        validate(
+            (secret_name,),
+            lambda: DogfoodHttpConfiguration(
+                base_url="http://127.0.0.1:1",
+                secret=_nonempty(environment, secret_name),
+            ),
+        )
+
+    return tuple(
+        {"name": name, "category": failures[name]} for name in sorted(failures)
+    )
+
+
 def load_preflight_configuration(
     environment: Mapping[str, str],
     *,
@@ -301,11 +537,11 @@ def load_preflight_configuration(
 
     try:
         selected = _selected_planes(selected_planes)
-        required = _required_names(selected)
-        if any(name not in environment for name in required):
+        failures = _configuration_failures(environment, selected)
+        if any(failure["category"] == "configuration_missing" for failure in failures):
             raise PreflightConfigurationMissing
-        for name in required:
-            _nonempty(environment, name)
+        if failures:
+            raise PreflightConfigurationMalformed
 
         database_urls: dict[str, URL] = {}
         for plane in selected:
@@ -314,60 +550,8 @@ def load_preflight_configuration(
                     environment, role_name, url_name, expected_role
                 )
 
-        if "control" in selected:
-            _uuid(environment, "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID")
-            _uuid(environment, "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID")
-            _uuid(environment, "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID")
-            _positive_int(environment, "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION")
-            operations = _nonempty(
-                environment, "CONTEXT_ENGINE_CONTROL_OPERATOR_OPERATIONS"
-            ).split(",")
-            if frozenset(operations) != _CONTROL_OPERATIONS or len(operations) != len(
-                _CONTROL_OPERATIONS
-            ):
-                raise PreflightConfigurationMalformed
-            _validate_json_roots(environment)
-
-        if "runtime" in selected:
-            if (
-                _nonempty(environment, "CONTEXT_ENGINE_API_COMPOSITION")
-                != "dogfood-local-v1"
-            ):
-                raise PreflightConfigurationMalformed
-            for name in (
-                "CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID",
-                "CONTEXT_ENGINE_DOGFOOD_USER_ID",
-                "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_ID",
-            ):
-                _uuid(environment, name)
-            _positive_int(environment, "CONTEXT_ENGINE_DOGFOOD_MEMBERSHIP_VERSION")
-            if (
-                _nonempty(environment, "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_PROVIDER")
-                != "qwen3-embedding-0.6b-local-v1"
-            ):
-                raise PreflightConfigurationMalformed
-
-        if "supply" in selected:
-            if (
-                _nonempty(environment, "CONTEXT_ENGINE_WORKER_EMBEDDING_PROVIDER")
-                != "qwen-local"
-                or _positive_int(
-                    environment, "CONTEXT_ENGINE_WORKER_EMBEDDING_DIMENSION"
-                )
-                != 384
-            ):
-                raise PreflightConfigurationMalformed
-            _uuid(environment, "CONTEXT_ENGINE_WORKER_SERVICE_PRINCIPAL_ID")
-            _validate_json_roots(environment)
-
         model_dir: Path | None = None
         if selected & {"supply", "runtime"}:
-            worker_model = environment.get("CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR")
-            runtime_model = environment.get(
-                "CONTEXT_ENGINE_DOGFOOD_EMBEDDING_MODEL_DIR"
-            )
-            if selected >= {"supply", "runtime"} and worker_model != runtime_model:
-                raise PreflightConfigurationMalformed
             model_dir = Path(
                 _nonempty(
                     environment,
@@ -377,40 +561,6 @@ def load_preflight_configuration(
                 )
             )
 
-        secret_names = required & {
-            "CONTEXT_ENGINE_CONTROL_OPERATOR_SECRET",
-            "CONTEXT_ENGINE_RELEASE_OPERATOR_SECRET",
-            "CONTEXT_ENGINE_DOGFOOD_SECRET",
-        }
-        key_names = required & {
-            "CONTEXT_ENGINE_WORKER_LEASE_SIGNING_KEY_HEX",
-            "CONTEXT_ENGINE_FILE_CHANGE_PROVIDER_SIGNING_KEY_HEX",
-            "CONTEXT_ENGINE_FILE_CHANGE_CHECKPOINT_SIGNING_KEY_HEX",
-            "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_HEX",
-        }
-        secrets = [_secret(environment, name) for name in sorted(secret_names)]
-        secrets.extend(_key(environment, name) for name in sorted(key_names))
-        for index, secret in enumerate(secrets):
-            if any(
-                hmac.compare_digest(secret, other) for other in secrets[index + 1 :]
-            ):
-                raise PreflightConfigurationMalformed
-
-        if selected >= {"control", "runtime"} and _uuid(
-            environment, "CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID"
-        ) != _uuid(environment, "CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID"):
-            raise PreflightConfigurationMalformed
-
-        if "release" in selected:
-            _positive_int(
-                environment, "CONTEXT_ENGINE_RELEASE_EVALUATION_SIGNING_KEY_VERSION"
-            )
-        caller_configuration_validated = False
-        if "caller" in selected:
-            from adapters.http.dogfood_client import DogfoodHttpConfiguration
-
-            DogfoodHttpConfiguration.load(environment)
-            caller_configuration_validated = True
         return LocalPreflightConfiguration(
             selected_planes=selected,
             database_urls=database_urls,
@@ -438,7 +588,7 @@ def load_preflight_configuration(
                 if "runtime" in selected
                 else {}
             ),
-            caller_configuration_validated=caller_configuration_validated,
+            caller_configuration_validated="caller" in selected,
         )
     except PreflightConfigurationMissing:
         raise
@@ -498,7 +648,11 @@ def packaged_schema_head() -> str:
 
 
 def _create_preflight_engine(url: URL) -> Engine:
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 5},
+    )
 
 
 _ROLE_DATABASE_URLS: dict[str, str] = {
@@ -597,8 +751,8 @@ def probe_schema_readiness(configuration: LocalPreflightConfiguration) -> str:
                     )
                 ).one()
                 if tuple(role) != (
-                    "context_engine_migrator",
-                    "context_engine_migrator",
+                    MIGRATOR_ROLE,
+                    MIGRATOR_ROLE,
                     False,
                     False,
                 ):
@@ -626,13 +780,19 @@ def probe_model_readiness(configuration: LocalPreflightConfiguration) -> str:
         return "not_selected"
     try:
         from adapters import local_embedding_model
-
-        local_embedding_model.registered_qwen_snapshot_contract()
     except Exception:
         return "model_manifest_unavailable"
     try:
+        local_embedding_model.registered_qwen_snapshot_contract()
+    except local_embedding_model.LocalEmbeddingModelReadinessError as refusal:
+        return refusal.readiness_category
+    except Exception:
+        return "model_manifest_invalid"
+    try:
         local_embedding_model.verify_registered_qwen_artifacts(configuration.model_dir)
         return "ready"
+    except local_embedding_model.LocalEmbeddingModelReadinessError as refusal:
+        return refusal.readiness_category
     except Exception:
         return "model_artifacts_invalid"
 
@@ -790,22 +950,28 @@ class PreflightResult:
     rendered: str
 
 
+@dataclass(frozen=True, slots=True)
+class _CheckSpecification:
+    name: str
+    plane: str
+    exit_code: int
+
+
 Probe = Callable[[LocalPreflightConfiguration], str]
 DatabaseProbe = Callable[[LocalPreflightConfiguration, str], str]
 
-_CHECK_NAMES = (
-    "migration_schema",
-    "control_database",
-    "supply_scheduler_database",
-    "supply_worker_database",
-    "supply_model",
-    "release_learning_database",
-    "release_operator_database",
-    "runtime_release",
-    "runtime_model",
-    "caller_configuration",
+_CHECK_SPECIFICATIONS = (
+    _CheckSpecification("migration_schema", "migration", 11),
+    _CheckSpecification("control_database", "control", 12),
+    _CheckSpecification("supply_scheduler_database", "supply", 13),
+    _CheckSpecification("supply_worker_database", "supply", 14),
+    _CheckSpecification("supply_model", "supply", 15),
+    _CheckSpecification("release_learning_database", "release", 16),
+    _CheckSpecification("release_operator_database", "release", 17),
+    _CheckSpecification("runtime_release", "runtime", 18),
+    _CheckSpecification("runtime_model", "runtime", 19),
+    _CheckSpecification("caller_configuration", "caller", 20),
 )
-_EXIT_CODES = (11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
 _SCHEMA_CATEGORIES = frozenset(
     {"ready", "schema_unreachable", "schema_probe_refused", "schema_not_at_head"}
 )
@@ -839,11 +1005,11 @@ class _PrivateArgumentParser(argparse.ArgumentParser):
         self.exit(2, "context-engine-control: preflight refused\n")
 
 
-def _row(check: str, status: str, category: str) -> dict[str, str]:
+def _row(check: str, status: str, category: str) -> dict[str, object]:
     return {"check": check, "status": status, "category": category}
 
 
-def _document(checks: list[dict[str, str]]) -> str:
+def _document(checks: list[dict[str, object]]) -> str:
     status = (
         "ready"
         if all(
@@ -891,98 +1057,136 @@ def run_preflight(
     caller_probe: Probe,
 ) -> PreflightResult:
     try:
-        configuration = load_preflight_configuration(
-            environment, selected_planes=selected_planes
-        )
-    except PreflightConfigurationMissing:
-        checks = [_row("configuration", "failed", "configuration_missing")]
-        checks.extend(
-            _row(check, "not_run", "dependency_not_ready") for check in _CHECK_NAMES
-        )
-        return PreflightResult(10, _document(checks))
+        selected = _selected_planes(selected_planes)
     except PreflightConfigurationMalformed:
         checks = [_row("configuration", "failed", "configuration_malformed")]
         checks.extend(
-            _row(check, "not_run", "dependency_not_ready") for check in _CHECK_NAMES
+            _row(specification.name, "not_run", "dependency_not_ready")
+            for specification in _CHECK_SPECIFICATIONS
         )
         return PreflightResult(10, _document(checks))
 
-    selected = configuration.selected_planes
+    failures = _configuration_failures(environment, selected)
+    invalid_planes = {
+        plane
+        for plane in selected
+        if any(
+            failure["name"] in _PLANE_ENVIRONMENT_NAMES[plane] for failure in failures
+        )
+    }
+    valid_planes = selected - invalid_planes
+    configuration = (
+        load_preflight_configuration(
+            environment,
+            selected_planes=tuple(plane for plane in PLANES if plane in valid_planes),
+        )
+        if valid_planes
+        else LocalPreflightConfiguration(
+            selected_planes=frozenset(),
+            database_urls={},
+            model_dir=None,
+            identity={},
+            caller_configuration_validated=False,
+        )
+    )
+
     shared_model = _observe(
-        bool(selected & {"supply", "runtime"}),
+        bool(valid_planes & {"supply", "runtime"}),
         lambda: model_probe(configuration),
         allowed=_MODEL_CATEGORIES,
         refusal="model_artifacts_invalid",
     )
     categories = [
         _observe(
-            "migration" in selected,
+            "migration" in valid_planes,
             lambda: schema_probe(configuration),
             allowed=_SCHEMA_CATEGORIES,
             refusal="schema_probe_refused",
         ),
         _observe(
-            "control" in selected,
+            "control" in valid_planes,
             lambda: database_probe(configuration, "control"),
             allowed=_DATABASE_CATEGORIES,
             refusal="database_probe_refused",
         ),
         _observe(
-            "supply" in selected,
+            "supply" in valid_planes,
             lambda: database_probe(configuration, "scheduler"),
             allowed=_DATABASE_CATEGORIES,
             refusal="database_probe_refused",
         ),
         _observe(
-            "supply" in selected,
+            "supply" in valid_planes,
             lambda: database_probe(configuration, "worker"),
             allowed=_DATABASE_CATEGORIES,
             refusal="database_probe_refused",
         ),
-        shared_model if "supply" in selected else "not_selected",
+        shared_model if "supply" in valid_planes else "not_selected",
         _observe(
-            "release" in selected,
+            "release" in valid_planes,
             lambda: database_probe(configuration, "learning"),
             allowed=_DATABASE_CATEGORIES,
             refusal="database_probe_refused",
         ),
         _observe(
-            "release" in selected,
+            "release" in valid_planes,
             lambda: database_probe(configuration, "release_operator"),
             allowed=_DATABASE_CATEGORIES,
             refusal="database_probe_refused",
         ),
         _observe(
-            "runtime" in selected,
+            "runtime" in valid_planes,
             lambda: release_probe(configuration),
             allowed=_RELEASE_CATEGORIES,
             refusal="runtime_probe_refused",
         ),
-        shared_model if "runtime" in selected else "not_selected",
+        shared_model if "runtime" in valid_planes else "not_selected",
         _observe(
-            "caller" in selected,
+            "caller" in valid_planes,
             lambda: caller_probe(configuration),
             allowed=_CALLER_CATEGORIES,
             refusal="caller_configuration_invalid",
         ),
     ]
-    checks = [_row("configuration", "ready", "ready")]
-    checks.extend(
-        _row(
-            check,
-            "ready"
-            if category == "ready"
-            else "not_run"
-            if category == "not_selected"
-            else "failed",
-            category,
+    if failures:
+        configuration_category = (
+            "configuration_missing"
+            if any(
+                failure["category"] == "configuration_missing" for failure in failures
+            )
+            else "configuration_malformed"
         )
-        for check, category in zip(_CHECK_NAMES, categories, strict=True)
-    )
-    exit_code = 0
-    for code, category in zip(_EXIT_CODES, categories, strict=True):
-        if category not in {"ready", "not_selected"}:
-            exit_code = code
+        configuration_row = _row("configuration", "failed", configuration_category)
+        configuration_row["failures"] = list(failures)
+        exit_code = 10
+    else:
+        configuration_row = _row("configuration", "ready", "ready")
+        exit_code = 0
+    checks = [configuration_row]
+    for specification, category in zip(
+        _CHECK_SPECIFICATIONS, categories, strict=True
+    ):
+        if specification.plane in invalid_planes:
+            checks.append(
+                _row(specification.name, "not_run", "dependency_not_ready")
+            )
+        else:
+            checks.append(
+                _row(
+                    specification.name,
+                    "ready"
+                    if category == "ready"
+                    else "not_run"
+                    if category == "not_selected"
+                    else "failed",
+                    category,
+                )
+            )
+    for specification, category in zip(
+        _CHECK_SPECIFICATIONS, categories, strict=True
+    ):
+        if exit_code == 0 and category not in {"ready", "not_selected"}:
+            exit_code = specification.exit_code
             break
     return PreflightResult(exit_code, _document(checks))
 
@@ -1026,6 +1230,8 @@ def main(
 
 
 __all__ = [
+    "ENVIRONMENT_TEMPLATE_NAMES",
+    "JOURNEY_ENVIRONMENT_NAMES",
     "LocalPreflightConfiguration",
     "PLANES",
     "PreflightConfigurationMalformed",

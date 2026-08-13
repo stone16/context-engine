@@ -191,9 +191,12 @@ def verify_ready_deployment(
             or metadata.st_mode & 0o777 != 0o600
         ):
             raise DeploymentBindingRefused
-        manifest = DeploymentManifest.from_document(
-            json.loads(path.read_text(encoding="utf-8"))
-        )
+        try:
+            manifest = DeploymentManifest.from_document(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
+        except ValueError:
+            raise DeploymentBindingRefused from None
         if manifest.status != "ready":
             raise DeploymentBindingRefused
         if manifest.binding.code_revision != current_code_revision(checkout):

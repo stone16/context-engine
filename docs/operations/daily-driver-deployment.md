@@ -77,11 +77,13 @@ and setup never migrates. On refusal run the separately authorized migration,
 then explicitly rerun the setup command above:
 
 ```bash
-cd "$CONTEXT_ENGINE_DEPLOY_CHECKOUT"
-set -a
-source .context-engine/database.env
-set +a
-uv run context-engine-control migrate
+(
+  cd "$CONTEXT_ENGINE_DEPLOY_CHECKOUT"
+  set -a
+  source .context-engine/database.env
+  set +a
+  "$CONTEXT_ENGINE_UV_EXECUTABLE" run context-engine-control migrate
+)
 cd /private/tmp
 python3 '<reviewed-source-checkout>/scripts/daily_driver_setup.py' \
   --checkout "$CONTEXT_ENGINE_DEPLOY_CHECKOUT" \

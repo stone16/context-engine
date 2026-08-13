@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+ROOT = Path(__file__).parents[2]
+
 
 @pytest.mark.parametrize("service", ("api", "worker"))
 def test_daemon_process_refuses_missing_binding_without_leaking_inputs(
@@ -45,6 +47,7 @@ def test_daemon_process_refuses_missing_binding_without_leaking_inputs(
         capture_output=True,
         text=True,
         env={"PATH": os.environ.get("PATH", "")},
+        cwd=ROOT,
     )
 
     assert completed.returncode == 2

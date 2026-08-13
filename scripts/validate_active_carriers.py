@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 REPOSITORY_ROOT: Final = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY_PATH: Final = REPOSITORY_ROOT / "eval/catalogs/active-carriers-v1.json"
@@ -35,6 +36,12 @@ _STATUS_CARRIER_PATTERN: Final = re.compile(
     r"^- `(?P<id>[a-z0-9-]+)`: `(?P<status>ACTIVE_BOUNDED|NOT_ACTIVE)`$",
     re.MULTILINE,
 )
+_PUBLIC_PROOF_GATE_BY_DIRECTORY: Final = {
+    "tests/unit/": "test",
+    "tests/catalog/": "catalog",
+    "tests/process/": "smoke",
+    "tests/integration/": "integration",
+}
 
 
 @dataclass(frozen=True)
@@ -75,19 +82,39 @@ def _load_json(path: Path) -> dict[str, Any]:
     return document
 
 
-def _target_names(makefile: str) -> set[str]:
-    return {
-        line.split(":", maxsplit=1)[0]
-        for line in makefile.splitlines()
-        if line and not line[0].isspace() and ":" in line
-    }
+def _logical_makefile_lines(makefile: str) -> tuple[str, ...]:
+    logical_lines: list[str] = []
+    current: str | None = None
+    for physical_line in makefile.splitlines():
+        trailing_backslashes = len(physical_line) - len(physical_line.rstrip("\\"))
+        continues = trailing_backslashes % 2 == 1
+        fragment = physical_line[:-1] if continues else physical_line
+        current = (
+            fragment if current is None else f"{current.rstrip()} {fragment.lstrip()}"
+        )
+        if not continues:
+            logical_lines.append(current)
+            current = None
+    if current is not None:
+        logical_lines.append(current)
+    return tuple(logical_lines)
 
 
-def _check_targets(makefile: str) -> set[str]:
-    for line in makefile.splitlines():
-        if line.startswith("check:"):
-            return set(line.removeprefix("check:").split()) | {"check"}
-    return set()
+def _make_rules(makefile: str) -> dict[str, set[str]]:
+    rules: dict[str, set[str]] = {}
+    for line in _logical_makefile_lines(makefile):
+        if not line or line[0].isspace() or ":" not in line:
+            continue
+        targets_text, prerequisites_text = line.split(":", maxsplit=1)
+        targets = {target for target in targets_text.split() if target != "\\"}
+        prerequisites = {
+            prerequisite
+            for prerequisite in prerequisites_text.split(";", maxsplit=1)[0].split()
+            if prerequisite != "\\"
+        }
+        for target in targets:
+            rules.setdefault(target, set()).update(prerequisites)
+    return rules
 
 
 def _reference_is_live(reference: Mapping[str, object], repository_root: Path) -> bool:
@@ -103,8 +130,10 @@ def _reference_is_live(reference: Mapping[str, object], repository_root: Path) -
     if not candidate.is_file():
         return False
     marker = reference.get("marker")
-    return not isinstance(marker, str) or marker in candidate.read_text(
-        encoding="utf-8"
+    return (
+        isinstance(marker, str)
+        and bool(marker)
+        and marker in candidate.read_text(encoding="utf-8")
     )
 
 
@@ -120,12 +149,34 @@ def _references_are_live(value: object, repository_root: Path) -> bool:
     )
 
 
+def _public_proof_gate_targets(value: object) -> set[str] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    required_targets: set[str] = set()
+    for reference in value:
+        if not isinstance(reference, dict):
+            return None
+        path = reference.get("path")
+        if not isinstance(path, str):
+            return None
+        matching_targets = {
+            target
+            for directory, target in _PUBLIC_PROOF_GATE_BY_DIRECTORY.items()
+            if path.startswith(directory)
+        }
+        if len(matching_targets) != 1:
+            return None
+        required_targets.update(matching_targets)
+    return required_targets
+
+
 def validate_active_carrier_registry(
     registry: Mapping[str, Any],
     schema: Mapping[str, Any],
     *,
     repository_root: Path = REPOSITORY_ROOT,
 ) -> CarrierValidationReport:
+    Draft202012Validator.check_schema(schema)
     schema_errors = tuple(Draft202012Validator(schema).iter_errors(registry))
     if schema_errors:
         schema_categories = {
@@ -140,12 +191,10 @@ def validate_active_carrier_registry(
     owners: set[tuple[str, str]] = set()
     carrier_ids: set[str] = set()
     inactive_relations: set[str] = set()
-    make_targets = _target_names(
-        (repository_root / "Makefile").read_text(encoding="utf-8")
-    )
-    check_targets = _check_targets(
-        (repository_root / "Makefile").read_text(encoding="utf-8")
-    )
+    makefile = (repository_root / "Makefile").read_text(encoding="utf-8")
+    make_rules = _make_rules(makefile)
+    make_targets = set(make_rules)
+    check_targets = make_rules.get("check", set()) | {"check"}
     for carrier in carriers:
         if carrier["id"] in carrier_ids:
             categories.add("DUPLICATE_CARRIER_OWNER")
@@ -166,9 +215,24 @@ def validate_active_carrier_registry(
             migration["refs"], repository_root
         ):
             categories.add("DANGLING_MIGRATION")
-        if not _references_are_live(carrier["highestPublicTestRefs"], repository_root):
+        public_proof_refs = carrier["highestPublicTestRefs"]
+        public_proof_is_live = _references_are_live(public_proof_refs, repository_root)
+        if not public_proof_is_live:
             categories.add("DANGLING_PUBLIC_PROOF")
-        if not set(carrier["gateTargets"]).issubset(make_targets & check_targets):
+        gate_targets = set(carrier["gateTargets"])
+        gate_targets_are_live = gate_targets.issubset(make_targets & check_targets)
+        public_proof_targets = (
+            _public_proof_gate_targets(public_proof_refs)
+            if public_proof_is_live
+            else None
+        )
+        if not gate_targets_are_live or (
+            public_proof_is_live
+            and (
+                public_proof_targets is None
+                or gate_targets != public_proof_targets | {"check"}
+            )
+        ):
             categories.add("DANGLING_GATE")
         if not _references_are_live(carrier["operatorDocRefs"], repository_root):
             categories.add("DANGLING_OPERATOR_DOCUMENT")
@@ -190,9 +254,7 @@ def validate_active_carrier_registry(
     if categories:
         raise CarrierValidationError(tuple(categories))
 
-    active_count = sum(
-        carrier["status"] == "ACTIVE_BOUNDED" for carrier in carriers
-    )
+    active_count = sum(carrier["status"] == "ACTIVE_BOUNDED" for carrier in carriers)
     return CarrierValidationReport(
         carrier_count=len(carriers),
         active_count=active_count,
@@ -221,20 +283,31 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        registry = _load_json(arguments.registry)
-        schema = _load_json(arguments.schema)
+        try:
+            registry = _load_json(arguments.registry)
+            schema = _load_json(arguments.schema)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise CarrierValidationError(("REGISTRY_SCHEMA_INVALID",)) from error
         validate_active_carrier_registry(
             registry,
             schema,
             repository_root=arguments.repository_root.resolve(),
         )
-    except (CarrierValidationError, OSError, json.JSONDecodeError) as error:
+    except (CarrierValidationError, SchemaError) as error:
         categories = (
             error.categories
             if isinstance(error, CarrierValidationError)
             else ("REGISTRY_SCHEMA_INVALID",)
         )
         print(json.dumps(_result(status="FAIL", categories=categories), sort_keys=True))
+        return 1
+    except OSError:
+        print(
+            json.dumps(
+                _result(status="FAIL", categories=("REPOSITORY_UNAVAILABLE",)),
+                sort_keys=True,
+            )
+        )
         return 1
     print(json.dumps(_result(status="PASS", categories=()), sort_keys=True))
     return 0

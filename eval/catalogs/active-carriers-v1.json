@@ -121,6 +121,27 @@
       "notActiveRelations": ["REMOTE_MULTIUSER_RUNTIME"]
     },
     {
+      "id": "registered-model-materializer",
+      "status": "ACTIVE_BOUNDED",
+      "statusOwner": {"path": "STATUS.md", "marker": "Registered local model materializer"},
+      "authorityRefs": [
+        {"path": "docs/decisions/0106-materialize-registered-models-through-one-operator-boundary.md", "marker": "Status: accepted"}
+      ],
+      "entrypointRefs": [
+        {"path": "pyproject.toml", "marker": "context-engine-model-materializer"},
+        {"path": "applications/model_materializer.py", "marker": "def main"}
+      ],
+      "migration": {"notApplicableRationale": "LOCAL_PROVISIONING_TOOL_OWNS_NO_PERSISTENCE"},
+      "highestPublicTestRefs": [
+        {"path": "tests/process/test_model_materializer_process.py", "marker": "test_model_materializer_fetches_tiny_registered_twin_and_publishes_once"}
+      ],
+      "gateTargets": ["smoke", "check"],
+      "operatorDocRefs": [
+        {"path": "README.md", "marker": "context-engine-model-materializer"}
+      ],
+      "notActiveRelations": ["EXTERNAL_NETWORK_MODEL", "RUNTIME_REWRITE_RERANK_SELECT"]
+    },
+    {
       "id": "repo-local-claude-acquire-v0",
       "status": "ACTIVE_BOUNDED",
       "statusOwner": {"path": "STATUS.md", "marker": "Repo-local Claude Code consumer"},
@@ -143,7 +164,7 @@
       ],
       "migration": {"notApplicableRationale": "LOCAL_CONSUMER_REUSES_HTTP_RUNTIME_SCHEMA"},
       "highestPublicTestRefs": [{"path": "tests/process/test_processes.py", "marker": "test_maintainer_context_process_exposes_only_read_subcommands"}],
-      "gateTargets": ["test", "check"],
+      "gateTargets": ["smoke", "check"],
       "operatorDocRefs": [{"path": "README.md", "marker": "maintainer caller"}],
       "notActiveRelations": ["CONTINUE", "OPEN_CITATION_OUTSIDE_EVIDENCE_CONSOLE", "MCP_BROADER_THAN_LOCAL_ACQUIRE", "GROUP_PUBLIC_DELIVERY", "RUNTIME_REWRITE_RERANK_SELECT"]
     },

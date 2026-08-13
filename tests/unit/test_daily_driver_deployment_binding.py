@@ -57,7 +57,9 @@ def test_ready_binding_accepts_exact_code_and_live_schema(
     ("field", "value"),
     (
         ("codeRevision", "c" * 40),
+        ("codeRevision", "z" * 40),
         ("schemaStateDigest", "sha256:" + "d" * 64),
+        ("schemaVersion", 1),
         ("status", "preparing"),
     ),
 )

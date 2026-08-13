@@ -99,9 +99,7 @@ def render_launchd_templates(
         "api_port": str(configuration.api_port),
     }
     rendered: dict[str, str] = {}
-    templates = sorted(
-        (checkout / "deploy" / "daily-driver").glob("*.plist.template")
-    )
+    templates = sorted((checkout / "deploy" / "daily-driver").glob("*.plist.template"))
     if not templates:
         raise LaunchdRenderRefused("tracked launchd templates are unavailable")
     for path in templates:
@@ -207,28 +205,29 @@ def _read_render_manifest(
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         raise LaunchdRenderRefused("render manifest is invalid") from None
-    if (
+    legacy_manifest_is_valid = (
         type(document) is dict
         and set(document) == {"labelPrefix", "plists", "schemaVersion"}
         and document["schemaVersion"] == 1
-        and document["labelPrefix"] == label_prefix
+        and type(document["labelPrefix"]) is str
         and type(document["plists"]) is list
         and document["plists"]
         and all(
-            type(name) is str
-            and Path(name).name == name
-            and name.endswith(".plist")
+            type(name) is str and Path(name).name == name and name.endswith(".plist")
             for name in document["plists"]
         )
         and len(set(document["plists"])) == len(document["plists"])
-    ):
+    )
+    if legacy_manifest_is_valid and document["labelPrefix"] != label_prefix:
+        raise LaunchdRenderRefused(
+            "launchd label prefix is immutable; uninstall before replacing it"
+        )
+    if legacy_manifest_is_valid:
         return frozenset(document["plists"])
     try:
         parsed = DeploymentManifest.from_document(document)
     except ValueError:
-        raise LaunchdRenderRefused(
-            "launchd label prefix is immutable; uninstall before replacing it"
-        ) from None
+        raise LaunchdRenderRefused("render manifest is invalid") from None
     if parsed.label_prefix != label_prefix:
         raise LaunchdRenderRefused(
             "launchd label prefix is immutable; uninstall before replacing it"

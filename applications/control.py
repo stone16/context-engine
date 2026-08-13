@@ -164,8 +164,12 @@ def _organization_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--organization-id", required=True)
 
 
-def main(argv: Sequence[str] | None = None) -> None:
-    parser = _parser()
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    extra_subcommands: tuple[tuple[str, str], ...] = (),
+) -> None:
+    parser = _parser(extra_subcommands=extra_subcommands)
     arguments = parser.parse_args(argv)
     if arguments.subcommand == "migrate":
         try:
@@ -530,7 +534,9 @@ def _bulk_article_policy_preview_json(preview: BulkArticlePolicyPreview) -> str:
                     "policyVersion": item.policy_version,
                     "resolutionRung": item.resolution_rung.value,
                     "resourceRef": item.resource_ref,
-                    "targetPolicy": article_policy_setting_document(item.target_policy),
+                    "targetPolicy": article_policy_setting_document(
+                        item.target_policy
+                    ),
                 }
                 for item in preview.items
             ],
@@ -617,12 +623,22 @@ def _multi_scan_report_json(report: MultiSourceScanReport) -> str:
             ],
             "sources": [_scan_report_document(source) for source in sources],
             "summary": {
-                "changesAccepted": sum(source.changes_accepted for source in sources),
-                "deletesObserved": sum(source.deletes_observed for source in sources),
-                "importsScheduled": sum(source.imports_scheduled for source in sources),
-                "pathsObserved": sum(source.paths_observed for source in sources),
+                "changesAccepted": sum(
+                    source.changes_accepted for source in sources
+                ),
+                "deletesObserved": sum(
+                    source.deletes_observed for source in sources
+                ),
+                "importsScheduled": sum(
+                    source.imports_scheduled for source in sources
+                ),
+                "pathsObserved": sum(
+                    source.paths_observed for source in sources
+                ),
                 "refusalCount": len(refusals),
-                "scanBounds": sorted({source.scan_bound for source in sources}),
+                "scanBounds": sorted(
+                    {source.scan_bound for source in sources}
+                ),
                 "sourceCount": len(report.outcomes),
             },
         },

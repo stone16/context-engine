@@ -195,6 +195,7 @@ class HttpArtifactTransport:
 
     def fetch(self, snapshot: RegisteredModelSnapshot, path: str) -> ArtifactResponse:
         url = self._initial_url(snapshot, path)
+        client: httpx.Client | None = None
         try:
             client = httpx.Client(
                 follow_redirects=False,
@@ -204,7 +205,6 @@ class HttpArtifactTransport:
             )
             for _redirect in range(_MAX_REDIRECTS + 1):
                 if not self._url_allowed(url):
-                    client.close()
                     raise MaterializationRefused("transport_refused", 11)
                 request = client.build_request("GET", url)
                 response = client.send(request, stream=True)
@@ -212,20 +212,23 @@ class HttpArtifactTransport:
                     location = response.headers.get("location")
                     response.close()
                     if location is None:
-                        client.close()
                         raise MaterializationRefused("transport_refused", 11)
                     url = urljoin(url, location)
                     continue
                 if response.status_code != 200:
                     response.close()
-                    client.close()
                     raise MaterializationRefused("transport_refused", 11)
-                return _ClosingResponse(response, client)
-            client.close()
+                closing_response = _ClosingResponse(response, client)
+                client = None
+                return closing_response
         except MaterializationRefused:
             raise
         except (httpx.HTTPError, OSError, ValueError):
             pass
+        finally:
+            if client is not None:
+                with suppress(Exception):
+                    client.close()
         raise MaterializationRefused("transport_refused", 11) from None
 
 
@@ -293,38 +296,43 @@ def _validate_destination(destination: Path) -> tuple[str, int]:
                 follow_symlinks=False,
             )
         except FileNotFoundError:
-            return destination.name, parent_descriptor
+            retained_descriptor = parent_descriptor
+            parent_descriptor = None
+            return destination.name, retained_descriptor
         else:
             raise MaterializationRefused("destination_exists", 13)
     except MaterializationRefused:
         raise
     except (OSError, RuntimeError, ValueError):
         raise MaterializationRefused("destination_unavailable", 10) from None
-    except BaseException:
+    finally:
         if parent_descriptor is not None:
             with suppress(OSError):
                 os.close(parent_descriptor)
-        raise
 
 
 def _open_or_create_directory(parent_descriptor: int, name: str) -> int:
     with suppress(FileExistsError):
         os.mkdir(name, mode=0o700, dir_fd=parent_descriptor)
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    return os.open(name, flags, dir_fd=parent_descriptor)
+    return os.open(name, _directory_flags(), dir_fd=parent_descriptor)
 
 
 def _directory_flags() -> int:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    return flags
+    directory_flag, no_follow_flag = _required_descriptor_flags()
+    return os.O_RDONLY | directory_flag | no_follow_flag
+
+
+def _required_descriptor_flags() -> tuple[int, int]:
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    no_follow_flag = getattr(os, "O_NOFOLLOW", None)
+    if (
+        type(directory_flag) is not int
+        or directory_flag == 0
+        or type(no_follow_flag) is not int
+        or no_follow_flag == 0
+    ):
+        raise RuntimeError
+    return directory_flag, no_follow_flag
 
 
 def _create_private_directory(
@@ -378,9 +386,8 @@ def _write_artifact(
             and not 0 <= expected_length <= _MAX_ARTIFACT_BYTES
         ):
             raise OSError
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        _directory_flag, no_follow_flag = _required_descriptor_flags()
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow_flag
         descriptor = os.open(
             parsed.parts[-1],
             flags,
@@ -389,20 +396,21 @@ def _write_artifact(
         )
         written = 0
         try:
-            with os.fdopen(descriptor, "wb", closefd=True) as handle:
-                for chunk in response.iter_bytes(_READ_SIZE):
-                    if type(chunk) is not bytes or not chunk:
-                        raise OSError
-                    written += len(chunk)
-                    if written > _MAX_ARTIFACT_BYTES:
-                        raise OSError
-                    handle.write(chunk)
-                handle.flush()
-                os.fsync(handle.fileno())
+            handle = os.fdopen(descriptor, "wb", closefd=True)
         except BaseException:
             with suppress(OSError):
                 os.close(descriptor)
             raise
+        with handle as stream:
+            for chunk in response.iter_bytes(_READ_SIZE):
+                if type(chunk) is not bytes or not chunk:
+                    raise OSError
+                written += len(chunk)
+                if written > _MAX_ARTIFACT_BYTES:
+                    raise OSError
+                stream.write(chunk)
+            stream.flush()
+            os.fsync(stream.fileno())
         if expected_length is not None and written != expected_length:
             raise OSError
     except MaterializationRefused:
@@ -467,6 +475,29 @@ def _discard_directory_contents(directory_descriptor: int) -> None:
             os.unlink(entry.name, dir_fd=directory_descriptor)
 
 
+def _require_destination_parent_identity(
+    destination_parent: Path,
+    retained_descriptor: int,
+) -> None:
+    current_descriptor: int | None = None
+    try:
+        current_descriptor = os.open(destination_parent, _directory_flags())
+        current = os.fstat(current_descriptor)
+        retained = os.fstat(retained_descriptor)
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or not stat.S_ISDIR(retained.st_mode)
+            or (current.st_dev, current.st_ino) != (retained.st_dev, retained.st_ino)
+        ):
+            raise OSError
+    except (OSError, RuntimeError, ValueError):
+        raise MaterializationRefused("publication_refused", 13) from None
+    finally:
+        if current_descriptor is not None:
+            with suppress(OSError):
+                os.close(current_descriptor)
+
+
 def _atomic_publish_no_clobber(
     staging_parent_descriptor: int,
     staging_descriptor: int,
@@ -482,9 +513,9 @@ def _atomic_publish_no_clobber(
             follow_symlinks=False,
         )
         retained = os.fstat(staging_descriptor)
-        if (
-            not stat.S_ISDIR(named.st_mode)
-            or (named.st_dev, named.st_ino) != (retained.st_dev, retained.st_ino)
+        if not stat.S_ISDIR(named.st_mode) or (named.st_dev, named.st_ino) != (
+            retained.st_dev,
+            retained.st_ino,
         ):
             raise OSError
     except OSError:
@@ -557,20 +588,16 @@ def materialize_registered_snapshot(
         raise
     except Exception:
         raise MaterializationRefused("registry_unavailable", 10) from None
-    destination_name, destination_parent_descriptor = _validate_destination(
-        destination
-    )
+    destination_name, destination_parent_descriptor = _validate_destination(destination)
     staging_parent_descriptor: int | None = None
     staging_descriptor: int | None = None
     staging_parent_name = ""
     staging_parent_identity: tuple[int, int] | None = None
     try:
         try:
-            staging_parent_name, staging_parent_descriptor = (
-                _create_private_directory(
-                    destination_parent_descriptor,
-                    ".context-engine-model-work-",
-                )
+            staging_parent_name, staging_parent_descriptor = _create_private_directory(
+                destination_parent_descriptor,
+                ".context-engine-model-work-",
             )
             os.fchmod(staging_parent_descriptor, 0o300)
             staging_name, staging_descriptor = _create_private_directory(
@@ -601,12 +628,20 @@ def materialize_registered_snapshot(
             )
         except Exception:
             raise MaterializationRefused("verification_refused", 12) from None
+        _require_destination_parent_identity(
+            destination.parent,
+            destination_parent_descriptor,
+        )
         _atomic_publish_no_clobber(
             staging_parent_descriptor,
             staging_descriptor,
             staging_name,
             destination_parent_descriptor,
             destination_name,
+        )
+        _require_destination_parent_identity(
+            destination.parent,
+            destination_parent_descriptor,
         )
     finally:
         if staging_descriptor is not None:

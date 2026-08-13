@@ -6,6 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
+from applications.preflight import REQUIRED_ENVIRONMENT_NAMES
+
 ROOT = Path(__file__).parents[2]
 
 
@@ -103,6 +107,10 @@ def test_control_preflight_missing_configuration_is_closed_json() -> None:
                 "check": "configuration",
                 "status": "failed",
                 "category": "configuration_missing",
+                "failures": [
+                    {"name": name, "category": "configuration_missing"}
+                    for name in sorted(REQUIRED_ENVIRONMENT_NAMES)
+                ],
             },
             {
                 "check": "migration_schema",
@@ -177,3 +185,38 @@ def test_control_preflight_invalid_selection_never_echoes_supplied_values() -> N
     assert completed.stdout == ""
     assert completed.stderr == "context-engine-control: preflight refused\n"
     assert private not in completed.stdout + completed.stderr
+
+
+def test_control_preflight_duplicate_selection_is_closed_contract_json() -> None:
+    completed = subprocess.run(
+        [
+            "context-engine-control",
+            "preflight",
+            "--plane",
+            "migration",
+            "--plane",
+            "migration",
+        ],
+        cwd=ROOT,
+        env=_environment(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 10
+    assert completed.stderr == ""
+    document = json.loads(completed.stdout)
+    assert document["checks"][0] == {
+        "check": "configuration",
+        "status": "failed",
+        "category": "configuration_malformed",
+    }
+
+    schema = json.loads(
+        (ROOT / "docs/contracts/context-engine-preflight-v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(document)

@@ -264,7 +264,9 @@ def load_harness_database_configurations(
         action=load_database_configuration(DatabasePurpose.TRUSTED_ACTION, source),
         runtime=load_database_configuration(DatabasePurpose.API_RUNTIME, source),
         worker=load_database_configuration(DatabasePurpose.SUPPLY_WORKER, source),
-        scheduler=load_database_configuration(DatabasePurpose.SUPPLY_SCHEDULER, source),
+        scheduler=load_database_configuration(
+            DatabasePurpose.SUPPLY_SCHEDULER, source
+        ),
         learning=load_database_configuration(DatabasePurpose.LEARNING, source),
         release_operator=load_database_configuration(
             DatabasePurpose.RELEASE_OPERATOR, source

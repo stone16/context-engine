@@ -58,8 +58,10 @@ the running service's own `/health` response.
 | Private File-backed bot delivery flow (deterministic twin) | Active |
 | Autonomous File import dispatch + bounded expired-lease reclaim | Active |
 | Loopback single-Membership File dogfood `Acquire` | Active when explicitly configured |
+| Maintainer-local stdio MCP `Acquire` translator | Active when explicitly configured |
+| Evidence Console private File citation reopening | Active when explicitly configured |
 | Production authentication (OAuth/JWT) | `NOT_ACTIVE` |
-| Real source ACLs, general content retrieval, `Continue` / `OpenCitation` | `NOT_ACTIVE` |
+| General source ACLs/retrieval, `Continue`, `OpenCitation` outside Evidence Console | `NOT_ACTIVE` |
 | Live Feishu / Slack / Google Docs connectors, group chat | `NOT_ACTIVE` |
 
 **[→ Full capability ledger with per-issue evidence boundaries (STATUS.md)](./STATUS.md)**
@@ -130,9 +132,27 @@ source .context-engine/database.env
 source .context-engine/operators.env
 set +a
 
+# This first all-plane run is a read-only diagnostic baseline and is expected
+# to return not_ready on a clean database.
 uv run context-engine-control preflight
 
 uv run context-engine-control migrate
+
+# Migration must now be independently ready before any database-dependent setup.
+uv run context-engine-control preflight --plane migration
+
+# Materialize the exact registered model into the new durable path configured
+# for both Supply and Runtime. This may download the registered model bytes.
+uv run context-engine-model-materializer \
+  --role primary \
+  --destination "$CONTEXT_ENGINE_WORKER_EMBEDDING_MODEL_DIR"
+
+# Control, Supply, Release, and the pinned local model must be ready before
+# further mutating setup.
+uv run context-engine-control preflight \
+  --plane control \
+  --plane supply \
+  --plane release
 
 uv run context-engine-dogfood-seed \
   --organization-id "$CONTEXT_ENGINE_DOGFOOD_ORGANIZATION_ID" \
@@ -167,6 +187,9 @@ uv run context-engine-control promote-release \
   --organization-id "$CONTEXT_ENGINE_OPERATOR_ORGANIZATION_ID" \
   --evidence-file "$CONTEXT_ENGINE_RELEASE_EVIDENCE_FILE"
 
+# The complete bounded composition must be ready before serving content.
+uv run context-engine-control preflight
+
 # Keep this foreground process running in a dedicated terminal.
 uv run context-engine-api --host 127.0.0.1
 
@@ -197,9 +220,12 @@ Ready is a point-in-time prerequisite, not production certification, an
 authorization grant, or Security/Reliability/Quality/Budget evidence. The
 command never migrates, seeds, scans, schedules, runs inference, promotes a
 Release, starts a process, or activates a carrier; every deferred boundary above
-remains `NOT_ACTIVE`. Run the separately authorized `migrate` command after the
-diagnostic when schema readiness is not at head, then rerun preflight before
-starting the worker or API.
+remains `NOT_ACTIVE`. The initial all-plane diagnostic is expected to be
+nonzero on a clean database; it is evidence about missing readiness, not a
+failed mutation. Run the separately authorized `migrate` command when schema
+readiness is not at head, require the migration-only rerun to pass, then require
+the selected Control/Supply/Release rerun before further mutating setup and the
+final all-plane rerun after promotion before starting the API.
 
 ### Run the API
 
@@ -615,15 +641,20 @@ never reported as an overall release PASS.
 
 ### The one public online contract
 
+The sequence below is the architectural contract, not a claim that every
+optional relevance stage is active in the served carrier. The current bounded
+composition uses pgvector candidate discovery only; hybrid/FTS fusion and
+Runtime rewrite/rerank/select remain `NOT_ACTIVE`.
+
 ```text
 ContextRuntime.resolve(AuthenticatedInvocation, TrustedDeliveryContext,
                        Acquire | Continue | OpenCitation)
 
-  → query understanding + dual recall (FTS + vector, RRF fusion)
+  → query understanding + candidate recall
   → CandidateRef                        ← carries NO deliverable body
   → AuthorizationKernel                 ← exact authorization + field projection
   → AuthorizedProjection                ← the first content-bearing value
-  → post-authorization hydration / rerank
+  → post-authorization hydration / optional relevance stages
       + small-to-big expansion, each item re-authorized
   → PackageBudget packing + sufficiency signal
   → ContextPackage                      ← citations / purpose / TTL / asOf

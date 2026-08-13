@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -9,8 +10,11 @@ import scripts.daily_driver.setup as daily_driver_setup
 from scripts.daily_driver.deployment import (
     READY_DEPLOYMENT_MANIFEST,
     DeploymentBinding,
+    DeploymentBindingRefused,
+    DeploymentManifest,
     SchemaBindingRefused,
 )
+from scripts.daily_driver.environment import EnvironmentRefused
 from scripts.daily_driver.setup import (
     DURABLE_DEPLOYMENT_MARKER,
     SetupRefused,
@@ -70,12 +74,14 @@ def test_unchanged_exact_head_setup_is_idempotent_without_optional_mcp_sdk(
     ) -> None:
         manifest = checkout / ".context-engine" / READY_DEPLOYMENT_MANIFEST
         manifest.parent.mkdir(exist_ok=True)
+        document = DeploymentManifest(
+            binding=binding,
+            label_prefix="test.context-engine",
+            plists=frozenset({"test.context-engine.api.plist"}),
+            status="ready",
+        ).to_document()
         manifest.write_text(
-            '{"codeRevision":"'
-            + binding.code_revision
-            + '","schemaStateDigest":"'
-            + binding.schema_state_digest
-            + '","schemaVersion":1,"status":"ready"}\n',
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
             encoding="utf-8",
         )
         manifest.chmod(0o600)
@@ -90,29 +96,29 @@ def test_unchanged_exact_head_setup_is_idempotent_without_optional_mcp_sdk(
     )
 
     arguments = (
-            "--checkout",
-            str(checkout),
-            "--origin",
-            "https://example.invalid/context-engine.git",
-            "--branch",
-            "main",
-            "--backup-root",
-            str(tmp_path / "backup"),
-            "--docker-executable",
-            str(executable),
-            "--uv-executable",
-            str(executable),
-            "--label-prefix",
-            "test.context-engine",
-            "--api-port",
-            "8137",
-            "--backup-hour",
-            "2",
-            "--scan-hour",
-            "3",
-            "--health-interval-seconds",
-            "60",
-        )
+        "--checkout",
+        str(checkout),
+        "--origin",
+        "https://example.invalid/context-engine.git",
+        "--branch",
+        "main",
+        "--backup-root",
+        str(tmp_path / "backup"),
+        "--docker-executable",
+        str(executable),
+        "--uv-executable",
+        str(executable),
+        "--label-prefix",
+        "test.context-engine",
+        "--api-port",
+        "8137",
+        "--backup-hour",
+        "2",
+        "--scan-hour",
+        "3",
+        "--health-interval-seconds",
+        "60",
+    )
 
     first = daily_driver_setup.main(arguments)
     first_manifest = (
@@ -128,21 +134,48 @@ def test_unchanged_exact_head_setup_is_idempotent_without_optional_mcp_sdk(
         ("make", "db-up"),
     ]
     manifest = checkout / ".context-engine" / READY_DEPLOYMENT_MANIFEST
-    assert manifest.read_text(encoding="utf-8") == (
-        '{"codeRevision":"'
-        + "a" * 40
-        + '","schemaStateDigest":"sha256:'
-        + "b" * 64
-        + '","schemaVersion":1,"status":"ready"}\n'
-    )
+    assert json.loads(manifest.read_text(encoding="utf-8")) == {
+        "codeRevision": "a" * 40,
+        "labelPrefix": "test.context-engine",
+        "plists": ["test.context-engine.api.plist"],
+        "schemaStateDigest": "sha256:" + "b" * 64,
+        "schemaVersion": 2,
+        "status": "ready",
+    }
     assert manifest.stat().st_mode & 0o777 == 0o600
     assert manifest.read_bytes() == first_manifest
 
 
-def test_updated_code_with_non_exact_schema_preserves_existing_deployment(
+@pytest.mark.parametrize(
+    ("failure_source", "refusal", "expected_error"),
+    [
+        (
+            "environment",
+            EnvironmentRefused(),
+            "daily-driver setup refused: restore the owner-only "
+            ".context-engine/database.env, then rerun setup\n",
+        ),
+        (
+            "binding",
+            DeploymentBindingRefused(),
+            "daily-driver setup refused: commit the dedicated checkout or restore "
+            "a clean checkout, then rerun setup\n",
+        ),
+        (
+            "binding",
+            SchemaBindingRefused(),
+            "daily-driver setup refused: run context-engine-control migrate, "
+            "then rerun setup\n",
+        ),
+    ],
+)
+def test_setup_binding_refusal_preserves_existing_deployment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    failure_source: str,
+    refusal: ValueError,
+    expected_error: str,
 ) -> None:
     checkout = tmp_path / "checkout"
     (checkout / ".git").mkdir(parents=True)
@@ -180,18 +213,30 @@ def test_updated_code_with_non_exact_schema_preserves_existing_deployment(
     monkeypatch.setattr(
         daily_driver_setup, "_ensure_operator_environment", lambda *_a: None
     )
-    monkeypatch.setattr(
-        daily_driver_setup,
-        "current_deployment_binding",
-        lambda _checkout, _environment: (_ for _ in ()).throw(
-            SchemaBindingRefused()
-        ),
-    )
+    if failure_source == "environment":
+        monkeypatch.setattr(
+            daily_driver_setup,
+            "load_owner_environment",
+            lambda _path: (_ for _ in ()).throw(refusal),
+        )
+        monkeypatch.setattr(
+            daily_driver_setup,
+            "current_deployment_binding",
+            lambda *_a: pytest.fail(
+                "environment refusal must precede deployment binding"
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            daily_driver_setup,
+            "current_deployment_binding",
+            lambda _checkout, _environment: (_ for _ in ()).throw(refusal),
+        )
     monkeypatch.setattr(
         daily_driver_setup,
         "write_rendered_templates",
         lambda *_a, **_kwargs: pytest.fail(
-            "schema refusal must precede plist publication"
+            "setup refusal must precede plist publication"
         ),
     )
     monkeypatch.setattr(
@@ -228,10 +273,7 @@ def test_updated_code_with_non_exact_schema_preserves_existing_deployment(
     captured = capsys.readouterr()
     assert result == 2
     assert captured.out == ""
-    assert captured.err == (
-        "daily-driver setup refused: run context-engine-control migrate, "
-        "then rerun setup\n"
-    )
+    assert captured.err == expected_error
     assert calls == [("make", "install-runtime"), ("make", "db-up")]
     assert manifest.read_text(encoding="utf-8") == old_manifest
     assert plist.read_text(encoding="utf-8") == "preserve plist"

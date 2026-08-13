@@ -45,9 +45,12 @@
     "reference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path"],
+      "required": ["path", "marker"],
       "properties": {
-        "path": {"type": "string", "pattern": "^[A-Za-z0-9_.\\/-]+$"},
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!\\.\\.(?:/|$))(?!.*\\/\\.\\.(?:/|$))[A-Za-z0-9_.\\/-]+$"
+        },
         "marker": {"type": "string", "minLength": 1, "maxLength": 160}
       }
     },
@@ -88,6 +91,7 @@
                 "DEFERRED_CARRIER_HAS_NO_DURABLE_STATE",
                 "LOCAL_CONSUMER_REUSES_HTTP_RUNTIME_SCHEMA",
                 "LOCAL_PROTOCOL_TRANSLATOR_OWNS_NO_PERSISTENCE",
+                "LOCAL_PROVISIONING_TOOL_OWNS_NO_PERSISTENCE",
                 "WIRE_CARRIER_REUSES_RUNTIME_SCHEMA"
               ]
             }
@@ -137,7 +141,9 @@
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"enum": ["catalog", "check", "integration", "test"]}
+          "items": {
+            "enum": ["catalog", "check", "integration", "smoke", "test"]
+          }
         },
         "operatorDocRefs": {
           "type": "array",

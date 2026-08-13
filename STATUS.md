@@ -52,6 +52,7 @@ The following closed inventory is the machine-checked STATUS coverage set:
 - `file-supply-worker`: `ACTIVE_BOUNDED`
 - `local-control-operator`: `ACTIVE_BOUNDED`
 - `local-release-promotion`: `ACTIVE_BOUNDED`
+- `registered-model-materializer`: `ACTIVE_BOUNDED`
 - `repo-local-claude-acquire-v0`: `ACTIVE_BOUNDED`
 - `maintainer-context-cli-acquire-v0`: `ACTIVE_BOUNDED`
 - `local-mcp-acquire-v0`: `ACTIVE_BOUNDED`
