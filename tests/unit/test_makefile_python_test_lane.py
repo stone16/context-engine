@@ -6,10 +6,25 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
-EGRESS_CONTRACT_PATH = "tests/unit/test_bot_delivery_model_egress_contract.py"
-STATIC_EGRESS_TEST = "test_model_egress_package_contract_is_closed_and_pinned"
-NODE_EGRESS_TEST = (
-    "test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial"
+NODE_TOOLCHAIN_TESTS = (
+    (
+        "tests/unit/test_bot_delivery_model_egress_contract.py",
+        "test_typescript_model_egress_is_closed_pinned_and_zero_byte_on_denial",
+    ),
+    (
+        "tests/unit/test_http_v1_accounting.py",
+        "test_generated_v1_sdk_observes_cumulative_usage_over_live_http",
+    ),
+)
+PYTHON_LANE_TESTS = (
+    (
+        "tests/unit/test_bot_delivery_model_egress_contract.py",
+        "test_model_egress_package_contract_is_closed_and_pinned",
+    ),
+    (
+        "tests/unit/test_http_v1_accounting.py",
+        "test_v1_wire_rejects_content_with_zero_cumulative_tokens",
+    ),
 )
 
 
@@ -86,12 +101,16 @@ def test_python_unit_lane_is_fast_while_full_gates_keep_their_contracts() -> Non
 
 
 def test_python_lane_marker_deselects_only_the_node_toolchain_portion() -> None:
-    filtered = _collect_only(
-        ("-m", "not node_toolchain", EGRESS_CONTRACT_PATH)
-    )
-    assert f"{EGRESS_CONTRACT_PATH}::{STATIC_EGRESS_TEST}" in filtered
-    assert NODE_EGRESS_TEST not in filtered
+    paths = tuple(dict.fromkeys(path for path, _test in NODE_TOOLCHAIN_TESTS))
 
-    unfiltered = _collect_only((EGRESS_CONTRACT_PATH,))
-    assert f"{EGRESS_CONTRACT_PATH}::{STATIC_EGRESS_TEST}" in unfiltered
-    assert f"{EGRESS_CONTRACT_PATH}::{NODE_EGRESS_TEST}" in unfiltered
+    filtered = _collect_only(("-m", "not node_toolchain", *paths))
+    for path, node_test in NODE_TOOLCHAIN_TESTS:
+        assert f"{path}::{node_test}" not in filtered
+    for path, python_test in PYTHON_LANE_TESTS:
+        assert f"{path}::{python_test}" in filtered
+
+    unfiltered = _collect_only(paths)
+    for path, node_test in NODE_TOOLCHAIN_TESTS:
+        assert f"{path}::{node_test}" in unfiltered
+    for path, python_test in PYTHON_LANE_TESTS:
+        assert f"{path}::{python_test}" in unfiltered
