@@ -41,11 +41,13 @@ from tests.unit.test_preflight import valid_environment
 
 pytestmark = pytest.mark.integration
 
+ROOT = Path(__file__).parents[2]
+
 
 def _database_environment() -> dict[str, str]:
     environment: dict[str, str] = {}
     for row in (
-        Path(".context-engine/database.env").read_text(encoding="utf-8").splitlines()
+        (ROOT / ".context-engine/database.env").read_text(encoding="utf-8").splitlines()
     ):
         name, value = row.split("=", maxsplit=1)
         environment[name] = value
@@ -204,7 +206,7 @@ def test_daily_driver_binding_refuses_interrupted_migration_then_accepts_rerun()
 
         engine = create_database_engine(configurations.migration)
         try:
-            alembic = Config(Path("alembic.ini"))
+            alembic = Config(ROOT / "alembic.ini")
             script = ScriptDirectory.from_config(alembic)
             head = script.get_revision("head")
             assert head is not None
