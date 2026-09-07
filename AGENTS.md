@@ -90,7 +90,7 @@ Each shelf owns its own rules. This table routes; it never restates a shelf.
 | changing domain behavior or terminology | `docs/agents/domain.md` |
 | filing, reading, or triaging a work item | `docs/agents/issue-tracker.md` |
 | labelling a work item | `docs/agents/triage-labels.md` |
-| touching the UI / components | Existing UI conventions; `DESIGN.md` if present |
+| touching the UI / components | `DESIGN.md` |
 | making an architectural choice | `docs/decisions/` (write a new ADR) |
 
 ## Definition of Done
