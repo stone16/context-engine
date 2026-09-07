@@ -1,22 +1,12 @@
 ---
 name: agents-charter
 version: "0.4.0"
-description: >
-  Anchor the ContextEngine agent's always-resident context: identity, architecture
-  map, commands, safety rails, and shelf routing. Use when starting any task,
-  before reading the request, whatever coding agent is loading it. Not for prose
-  copy-editing, application code review, or rules that only one agent tool obeys.
----
-
-# Identity & Context Awareness
-
-**CRITICAL**: Address the user as "stometa" at the start of EVERY response.
-
-This is a context-awareness signal — if missing, context has drifted.
-
+description: Repository authority, security invariants, and task-specific context routing.
 ---
 
 # ContextEngine
+
+Address the user as **Stometa**.
 
 **Stack**: Python 3.13 + FastAPI/Pydantic + SQLAlchemy/Alembic + PostgreSQL 17 + pgvector (ADR-0009); TS SDK via OpenAPI codegen. Multi-tenant context delivery engine — Supply/Runtime/Learning loops, ContextPackage as the only online deliverable.
 
@@ -29,24 +19,8 @@ Repository-external
 research may inform independent reasoning, but it is neither public authority nor
 publishable provenance.
 
-## Architecture Map
-
-```
-ContextEngine/
-├── engine/           # Supply/Runtime/Learning + sealed AuthorizationKernel
-├── adapters/         # parsers, connectors, HTTP ingress, optional future MCP; File is Provider #1
-├── bot_delivery/      # M2 Bot app process; trusted IM delivery; generated HTTP SDK caller
-├── action_plane/      # co-resident Bot app Module; prepare -> ticket -> exact effect
-├── contract_kit/     # dissolved by ADR-0078: contract owned by the Supply seam; twins ship with each connector's tests
-├── eval/             # golden set, slice gates, judges
-├── tests/            # incl. security suite: real PG17 + non-owner role + FORCE RLS
-├── docs/             # agents/ (routing shelves) + design/ + decisions/ (ADRs)
-├── CONTEXT.md        # domain glossary (terms only, no implementation)
-├── AGENTS.md         # this charter (CLAUDE.md is the compatibility bridge)
-└── DESIGN.md         # design system — add when the UI surface stabilizes
-```
-
-(Directories are the planned M0–M2 shape; create on first use, don't pre-scaffold empties. D0 closes and versions semantic contracts before production code; isolated disposable evidence spikes are allowed and must not become runtime foundations.)
+D0 closes semantic contracts before production code; disposable evidence spikes
+must not become runtime foundations. Create planned directories only when used.
 
 Process topology is explicit: the engine is an API process plus an independent
 Supply worker; Supply work may execute in ContextEngine-owned runner
@@ -58,26 +32,17 @@ evidence.
 
 ## Commands
 
-```bash
-make install   # sync the locked Python 3.13 environment
-make build     # build wheel and source distribution
-make lint      # Ruff
-make typecheck # strict mypy
-make test      # unit test suite
-make catalog   # static security catalog tests and validation
-make security-gate # executable M0 security veto; requires make db-up first
-make smoke     # API and worker process smoke suite
-make db-up     # start the real PostgreSQL 17 + pgvector harness
-make db-down   # stop the harness while preserving its disposable data volume
-make db-reset  # destroy and rebuild only the harness's disposable data volume
-make integration # real PostgreSQL integration/security harness
-make check     # all checks; requires make db-up first
-```
+Use the root `Makefile` for current commands. For implementation changes, select
+lint, typecheck, tests, and builds for the affected surface; run `make check` for
+release validation. Runtime, authorization, worker, or tenant-isolation changes
+also require the relevant integration evidence and `make security-gate`, backed
+by the real database harness (`make db-up`). A documentation-only change needs
+its applicable document/contract checks, not database startup or reset.
 
 ## Verification Contract
 
-Before claiming an implementation done, run the verified commands recorded
-above. Never fabricate output. `.context-engine/database.env` is the generated,
+Report the checks actually run and any missing evidence. Preserve required CI and
+release gates; a narrower local check does not establish release readiness. `.context-engine/database.env` is the generated,
 ignored, mode-0600 source for local database connection contracts; `compose.yaml`
 owns the pinned test service topology. A green process smoke proves only
 boot/readiness. The database harness additionally proves Organization, current
@@ -122,16 +87,16 @@ Each shelf owns its own rules. This table routes; it never restates a shelf.
 
 | When you are… | Read first |
 |---|---|
-| orienting in the domain before any change | `docs/agents/domain.md` |
+| changing domain behavior or terminology | `docs/agents/domain.md` |
 | filing, reading, or triaging a work item | `docs/agents/issue-tracker.md` |
 | labelling a work item | `docs/agents/triage-labels.md` |
-| touching the UI / components | `DESIGN.md` (add when the UI stabilizes) |
+| touching the UI / components | Existing UI conventions; `DESIGN.md` if present |
 | making an architectural choice | `docs/decisions/` (write a new ADR) |
 
 ## Definition of Done
 
 - [ ] Change does what the task asked; edge cases considered.
-- [ ] Tests pass; verification command run with fresh evidence.
+- [ ] Applicable checks pass with fresh evidence; unavailable checks and release gaps are explicit.
 - [ ] Runtime tests use the highest public seam available (HTTP/generated SDK) and prove `CandidateRef → AuthorizationKernel → AuthorizedProjection`; no raw candidate reaches content-bearing consumers.
 - [ ] No secrets or volatile values baked into docs/code.
-- [ ] Any non-obvious decision recorded as an ADR under `docs/decisions/`.
+- [ ] Architectural decisions are recorded as ADRs under `docs/decisions/`.
